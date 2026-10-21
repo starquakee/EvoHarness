@@ -173,10 +173,10 @@ The first version must preserve the existing modes and Harness²'s ground-truth-
 Run from the repository root with Python 3.12:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --python 3.12 \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 \
   python -m unittest discover -s tests -p 'test_workflow.py' -v
 
-PYTHONDONTWRITEBYTECODE=1 uv run --python 3.12 \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 \
   python -m harness2.cli.demo --output "$(mktemp -d)/pop-demo" --k 2 --mode population
 
 scripts/ralph/ralph.sh --agent kimi --dry-run

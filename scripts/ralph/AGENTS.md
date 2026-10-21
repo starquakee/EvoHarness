@@ -39,14 +39,14 @@ The repository has no separate static typechecker configured. For the PRD's type
 Run the full focused suite after each story because it is small and covers shared budget/resume behavior:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --python 3.12 \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 \
   python -m unittest discover -s tests -p 'test_workflow.py' -v
 ```
 
 Run narrower tests first when useful. For US-006, also run and repeat the real-Python Demo:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --python 3.12 \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 \
   python -m harness2.cli.demo --output "$(mktemp -d)/pop-demo" --k 2 --mode population
 ```
 
