@@ -1,0 +1,19 @@
+# Ralph Progress: iStratDE-Inspired Discrete Population Recursion
+
+Started: 2026-10-21
+Source PRD: tasks/prd-istratde-population.md
+
+## Codebase Patterns
+
+- Existing mode tokens are `agg` and `seq`; shared base executions are recorded in every mode Ledger.
+- Existing budgets are `R=4k` rollouts and `P=3k` improvement stages; final selection and reflection are recorded separately.
+- `RunView` never carries a score. `adapter.score` belongs to independent post-selection judging only.
+- Complete-task resume, deterministic labels/run ids, Proposer caching, and per-mode Libraries are existing contracts.
+- The deterministic Demo executes real Python and requires no model credentials.
+
+## 2026-10-21 - Baseline
+
+- Repository started clean on `main` at the forked Harness2 baseline.
+- Validation: `PYTHONDONTWRITEBYTECODE=1 uv run --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -v` — 5 tests passed.
+- Decision: implement US-001 through US-006 locally. US-007 remains blocked until Linux, LAB dependencies, model credentials/quota, network restrictions, and an approved sample/cost cap are available.
+---

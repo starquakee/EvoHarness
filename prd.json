@@ -1,0 +1,126 @@
+{
+  "project": "EvoHarness iStratDE-Inspired Discrete Population Recursion",
+  "branchName": "ralph/istratde-population",
+  "description": "Add a fixed-strategy discrete population recursion mode with answer-free survivor selection, auditable budgets, existing-mode compatibility, and a separately blocked real LAB improvement validation.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Discrete strategies and budget primitives",
+      "description": "As a researcher, I want deterministic population strategies and explicit budget helpers so that experiments are reproducible and auditable.",
+      "acceptanceCriteria": [
+        "Add harness2/core/population.py with fixed strategy generation, donor selection, component crossover, lineage records, and pop budget helpers.",
+        "Identical task/mode/k/version/slot inputs reproduce identical strategies across calls and generations.",
+        "Crossover returns a new Tree without mutating input Trees.",
+        "The deterministic schedule assigns one extra crossover trial per slot across two generations and exactly 3k total trial rollouts.",
+        "Tests prove R=4k, P=2k+2, P=3k at k=2, and P<3k at k>2.",
+        "Typecheck passes using the repository's Python 3.12 compile/import validation.",
+        "Focused unittest validation passes."
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Answer-free batch survivor comparison",
+      "description": "As a researcher, I want one anonymous comparator call per generation so that survivor selection has a quality signal without using a benchmark judge.",
+      "acceptanceCriteria": [
+        "Add batch comparison support in harness2/core/selection.py and harness2/core/prompts.py with unique generation roots and session labels.",
+        "The comparator receives anonymized task/source/artifact evidence and returns one explicit winner for every requested slot.",
+        "Invalid trials, missing winners, parser failures, and comparator exceptions preserve the relevant parent and are recorded.",
+        "Multi-generation calls do not delete each other's context or collide in the Proposer cache.",
+        "Tests prove adapter.score is never called and comparison costs and attempts are returned for Ledger recording.",
+        "Typecheck passes using the repository's Python 3.12 compile/import validation.",
+        "Focused unittest validation passes."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Two-generation population recursion",
+      "description": "As a researcher, I want a complete population recursion implementation so that fixed strategies can evolve Harnesses under a bounded budget.",
+      "acceptanceCriteria": [
+        "Add run_population and pop dispatch in harness2/core/recursion.py while leaving agg/seq behavior unchanged.",
+        "Each generation freezes parents, generates and executes all trials, then performs batch survivor selection without early survivor writes.",
+        "Record fixed strategies, parents, donors, trials, survivors, surrogate fitness, comparison outcomes, and lineage in ModeResult.",
+        "Update harness2/core/ledger.py for mode-aware budgets and include comparison sessions, costs, and attempts.",
+        "Tests cover budget identities, invalid proposal retry, failed-trial parent retention, exactly k final labels, and judge isolation.",
+        "Typecheck passes using the repository's Python 3.12 compile/import validation.",
+        "Focused unittest validation passes."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Scheduling, final selection, Library, and resume integration",
+      "description": "As a maintainer, I want population mode to use the existing task lifecycle so that results and experience remain consistent with other modes.",
+      "acceptanceCriteria": [
+        "Update schedule.py and selection.py to pass the existing selector into population recursion and actual final labels into final-pool construction.",
+        "Preserve agg/seq call signatures and final pools; pop explicitly permits a surviving base label and records it as base.",
+        "Chosen trees, materialized Harnesses, fingerprints, summaries, and selection records work for every survivor label including baseN.",
+        "Per-mode Libraries remain isolated and restored Libraries contain only earlier tasks from the same mode.",
+        "A complete second run adds no execute/Proposer calls; changed adopted Harnesses or missing adopted artifacts cause a rerun.",
+        "Typecheck passes using the repository's Python 3.12 compile/import validation.",
+        "Focused unittest validation passes."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "CLI, run identity, and reporting",
+      "description": "As an experimenter, I want consistent CLI and reporting support so that population runs cannot be confused with other experiments.",
+      "acceptanceCriteria": [
+        "Update mode parsing and help in cli/_common.py, cli/run_sweep.py, cli/demo.py, and cli/judge.py as applicable.",
+        "population and pop resolve to the same token; defaults and Demo both do not gain a new mode.",
+        "Population with k<2 fails before model calls with an actionable error.",
+        "Add an independent population strategy version to config.py and include it in identity only for population runs.",
+        "Update core/report.py so pop finals and base survivors are classified honestly and k=1 agg/seq logic never assumes every two-mode report contains both.",
+        "CLI dry-run, namespace, judge/report parsing, and old-default regression tests pass.",
+        "Typecheck passes using the repository's Python 3.12 compile/import validation.",
+        "Focused unittest validation passes."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Deterministic end-to-end Demo and documentation",
+      "description": "As a maintainer, I want a credential-free end-to-end check and accurate documentation so that the new mode can be verified without external services.",
+      "acceptanceCriteria": [
+        "Extend harness2/demo.py so scripted strategies produce distinguishable edits and batch comparisons select valid outputs using source evidence without a benchmark judge.",
+        "python -m harness2.cli.demo --k 2 --mode population completes two real-Python tasks, writes all population audit records, and resumes without new calls on repeat.",
+        "Update README.md and docs/EXPERIMENTS.md with mode behavior, budgets, base-survivor semantics, resume boundary, citations, and judge isolation.",
+        "Full unittest suite passes and existing agg/seq Demo behavior still passes.",
+        "Documentation does not claim real LAB improvement.",
+        "Typecheck passes using the repository's Python 3.12 compile/import validation."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Same-budget LAB comparison and independent evaluation",
+      "description": "As a researcher, I want a preregistered LAB comparison so that population mode is accepted only if it improves independent test performance within budget.",
+      "acceptanceCriteria": [
+        "BLOCKED until a supported Linux host, LAB dependencies, model credentials/quota, executor network restrictions, and a user-approved sample/cost cap are available.",
+        "Before execution, record the split, task stream, seed, models, sample size, cost cap, and stopping rule; test results cannot be used for repeated tuning.",
+        "Run parallel,population together at k=2 on the same tasks so base executions, models, judge, and network policy are shared.",
+        "Verify actual population rollouts and sessions do not exceed parallel budgets and no judge ran during optimization.",
+        "Run independent harness2-judge and harness2-report; save scores, ungraded rows, actual costs, timings, and failures.",
+        "Mark passed only if independent population test score exceeds parallel without exceeding the agreed budget; otherwise leave failed and record the negative result.",
+        "Typecheck passes using the repository's Python 3.12 compile/import validation for any code changed by this story."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
