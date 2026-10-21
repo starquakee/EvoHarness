@@ -79,3 +79,24 @@ Source PRD: tasks/prd-istratde-population.md
   - Population-only strategy, lineage, comparison, and fitness fields are added to `ModeResult.to_dict()` only for `pop`, leaving agg/seq summary schemas unchanged.
   - Invalid deterministic crossovers become failed trial RunViews without `adapter.execute`; they still consume the deterministic rollout budget and make the comparator preserve that slot's parent.
 ---
+
+## 2026-10-21 12:30:48 CST - US-004
+- Integrated explicit population runs with task scheduling, the configured selector, actual survivor-label final pools, base-survivor selection records, materialized harness fingerprints, mode-isolated Libraries, and complete-task resume. Existing default sweeps and agg/seq recursion arguments and final pools remain unchanged.
+- Files changed:
+  - `harness2/core/schedule.py`
+  - `harness2/core/selection.py`
+  - `harness2/core/library.py`
+  - `tests/test_workflow.py`
+  - `tasks/prd-istratde-population.md`
+  - `prd.json`
+  - `progress.txt`
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -v` — 18 tests passed, including population base survivors, selector forwarding, Library restoration, no-call resume, integrity-triggered reruns, and existing agg/seq regressions.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -c "from pathlib import Path; import harness2.core.schedule, harness2.core.selection, harness2.core.library; [compile(Path(name).read_text(), name, 'exec') for name in ('harness2/core/schedule.py', 'harness2/core/selection.py', 'harness2/core/library.py', 'tests/test_workflow.py')]"` — import and compile validation passed.
+  - `scripts/ralph/ralph.sh --agent kimi --dry-run` — dry run OK.
+  - `git diff --check` — passed.
+- **Learnings for future iterations:**
+  - `MODES` remains the default `agg,seq` run set; `SUPPORTED_MODES` additionally permits explicit `pop` scheduling. US-005 still owns public mode parsing/help, population strategy-version identity, and reporting.
+  - `selection_pool` now accepts optional `finals`; population requires the actual k survivor labels and permits `baseN`, while agg/seq retain their derived final labels.
+  - A population base survivor's harness is under the pop namespace, while its adopted run directory can reference the shared base execution under the agg namespace. Resume validates both paths and their contents.
+---

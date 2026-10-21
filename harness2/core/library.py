@@ -18,7 +18,7 @@
     <root>/<run-tag>/<mode>/<domain>/harnesses/<task>/harness/<rel>   the full adopted tree
     <root>/<run-tag>/<mode>/<domain>/harnesses/<task>/EXPERIENCE.md   why picked + lesson
 
-`<mode>` is the on-disk recursion token, `agg` or `seq`. Retrieval is by construction: a
+`<mode>` is the on-disk recursion token, `agg`, `seq`, or `pop`. Retrieval is by construction: a
 domain's directory only ever holds same-domain entries. The whole tree is carried, never a
 summary. Roots are scoped per run and mode, so each sweep starts every domain empty.
 """

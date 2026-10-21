@@ -108,12 +108,12 @@ The first version must preserve the existing modes and Harness²'s ground-truth-
 **Description:** As a maintainer, I want population mode to use the existing task lifecycle so that results and experience remain consistent with other modes.
 
 **Acceptance Criteria:**
-- [ ] Update `harness2/core/schedule.py` and `harness2/core/selection.py` to pass the existing selector into population recursion and the actual final labels into final-pool construction.
-- [ ] Preserve existing agg/seq call signatures and final pools; pop explicitly permits a surviving base label and records it as base.
-- [ ] Chosen trees, materialized Harnesses, fingerprints, summary records, and selection records work for every possible survivor label, including `baseN`.
-- [ ] Per-mode Libraries remain isolated, and restored Libraries contain only earlier tasks from the same mode.
-- [ ] A complete second run adds no execute/Proposer calls; a changed adopted Harness or missing adopted artifact causes a rerun.
-- [ ] Focused unittest command passes.
+- [x] Update `harness2/core/schedule.py` and `harness2/core/selection.py` to pass the existing selector into population recursion and the actual final labels into final-pool construction.
+- [x] Preserve existing agg/seq call signatures and final pools; pop explicitly permits a surviving base label and records it as base.
+- [x] Chosen trees, materialized Harnesses, fingerprints, summary records, and selection records work for every possible survivor label, including `baseN`.
+- [x] Per-mode Libraries remain isolated, and restored Libraries contain only earlier tasks from the same mode.
+- [x] A complete second run adds no execute/Proposer calls; a changed adopted Harness or missing adopted artifact causes a rerun.
+- [x] Focused unittest command passes.
 
 ### US-005: CLI, run identity, and reporting
 

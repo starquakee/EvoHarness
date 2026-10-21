@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from harness2 import config
-from harness2.core import context, judge, population, recursion, schedule, selection, tree
+from harness2.core import context, judge, population, recursion, runmark, schedule, selection, tree
 from harness2.core.library import Library
 from harness2.core.proposer import Proposer, ProposerError, Reply
 from harness2.core.spec import RunView, resolve_channel_model
@@ -725,6 +725,155 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result.survivors, {1: "base1", 2: "base2"})
         self.assertIn("uncertain", result.outcomes[0].error)
         self.assertIn("unknown candidate", result.outcomes[1].error)
+
+    def test_population_selection_pool_uses_actual_survivors(self):
+        rollouts = {
+            label: _comparison_rollout(self.root, label, "85.15")
+            for label in ("base1", "base2", "g2s1", "agg1", "agg2", "c1", "c2")
+        }
+        base = [rollouts["base1"], rollouts["base2"]]
+        pop = selection.selection_pool(
+            "pop", 2, rollouts, base, finals=["g2s1", "base2"]
+        )
+        self.assertEqual(list(pop), ["g2s1", "base2"])
+        for mode, expected in (("agg", ["agg1", "agg2"]), ("seq", ["c1", "c2"])):
+            self.assertEqual(list(selection.selection_pool(mode, 2, rollouts, base)), expected)
+        with self.assertRaisesRegex(ValueError, "actual ModeResult.finals"):
+            selection.selection_pool("pop", 2, rollouts, base)
+
+    def test_population_schedule_base_survivor_library_and_resume(self):
+        class PopulationSelector(_BatchProposer):
+            def __init__(self, spec):
+                super().__init__(spec)
+                self.responder = self.preserve_parents
+
+            def preserve_parents(self, mission, _context_dir):
+                slots = re.findall(r"^slot (\d+): [A-Z, ]+$", mission, re.M)
+                return "\n".join(
+                    f'<winner slot="{slot}" choice="UNCERTAIN">'
+                    "No source-supported improvement.</winner>"
+                    for slot in slots
+                )
+
+            def call(self, mission, context_dir, label, **kwargs):
+                if label.startswith("select.pop"):
+                    reply = Reply(
+                        label,
+                        "<why>Retain the surviving reference output.</why>"
+                        "```choice\nA\n```",
+                        True,
+                        cost_usd=0.5,
+                    )
+                elif label.startswith("experience."):
+                    reply = Reply(
+                        label,
+                        "<experience>\n"
+                        "cue: When a signed ledger needs reconciliation\n"
+                        "lesson: Check the script's treatment of credits and debits.\n"
+                        "evidence: The recorded probe contrasts show which amounts were included.\n"
+                        "confidence: high for the observed arithmetic contrast\n"
+                        "</experience>",
+                        True,
+                        cost_usd=0.25,
+                    )
+                else:
+                    return super().call(mission, context_dir, label, **kwargs)
+                self._calls.append(reply)
+                return reply
+
+        selector = PopulationSelector(self.proposer.spec)
+        modes = ("agg", "seq", "pop")
+        library_root = self.root / "library" / "population-integration"
+        self.adapter.score = Mock()
+
+        def run_stream():
+            return schedule.run_domain(
+                "accounting",
+                self.adapter.tasks(),
+                2,
+                adapter=self.adapter,
+                prop=self.proposer,
+                runs_root=self.adapter.spec.runs_root,
+                library_root=library_root,
+                modes=modes,
+                selector_prop=selector,
+            )
+
+        result = run_stream()
+        self.assertEqual((result["done"], result["failed"]), (2, 0))
+        self.assertEqual(len(selector.batch_calls), 4)
+        self.assertFalse(
+            any(reply.label.startswith("compare.") for reply in self.proposer._calls)
+        )
+
+        summary_path = self.adapter.spec.runs_root / "demo-oc-agg2/ledger-1/summary.json"
+        summary = json.loads(summary_path.read_text())
+        pop_mode = summary["modes"]["pop"]
+        self.assertEqual(len(pop_mode["finals"]), 2)
+        self.assertTrue(all(label.startswith("base") for label in pop_mode["finals"]))
+        self.assertEqual((pop_mode["ledger"]["R"], pop_mode["ledger"]["P"]), (8, 6))
+        pop_selection = summary["selections"]["pop"]
+        self.assertTrue(pop_selection["ok"])
+        self.assertTrue(pop_selection["chosen_is_base"])
+        self.assertTrue(pop_selection["chosen_tree_is_base"])
+        self.assertIn(pop_selection["chosen_label"], pop_mode["finals"])
+
+        pop_work = self.adapter.spec.runs_root / "demo-oc-pop2" / "ledger-1"
+        harness_dir = pop_work / "harnesses" / pop_selection["chosen_label"]
+        self.assertTrue(tree.is_tree(self.adapter.substrate.surface(), harness_dir))
+        self.assertEqual(
+            pop_selection["harness_fingerprint"], runmark.fingerprint(harness_dir)
+        )
+        selection_record = json.loads(
+            (pop_work / "selection/pop2/selection.json").read_text()
+        )
+        self.assertEqual(selection_record["chosen_label"], pop_selection["chosen_label"])
+        self.assertTrue(selection_record["chosen_is_base"])
+        self.assertEqual(
+            selection_record["chosen_run_dir"], pop_selection["chosen_run_dir"]
+        )
+        restored_context = (
+            self.adapter.spec.runs_root
+            / "demo-oc-pop2/ledger-2/context/g1s1/library/harnesses"
+        )
+        self.assertEqual([path.name for path in restored_context.iterdir()], ["ledger-1"])
+
+        executions = self.adapter.execution_count
+        calls = (len(self.proposer._calls), len(selector._calls))
+        restored = []
+        original_add = Library.add
+
+        def record_add(library, task_id, harness, **kwargs):
+            restored.append((library.root.name, task_id, library.entries(), kwargs["label"]))
+            return original_add(library, task_id, harness, **kwargs)
+
+        with patch.object(Library, "add", record_add):
+            resumed = run_stream()
+        self.assertEqual([row["status"] for row in resumed["tasks"]], ["skipped", "skipped"])
+        self.assertEqual(self.adapter.execution_count, executions)
+        self.assertEqual((len(self.proposer._calls), len(selector._calls)), calls)
+        for mode, prefix in (("agg", "agg"), ("seq", "c"), ("pop", "base")):
+            rows = [row for row in restored if row[0] == mode]
+            self.assertEqual(
+                [(task_id, before) for _mode, task_id, before, _label in rows],
+                [("ledger-1", []), ("ledger-2", ["ledger-1"])],
+            )
+            self.assertTrue(all(label.startswith(prefix) for *_rest, label in rows))
+
+        harness_file = harness_dir / "scripts/summarize.py"
+        harness_file.write_text("changed after selection\n", encoding="utf-8")
+        repaired = run_stream()
+        self.assertEqual([row["status"] for row in repaired["tasks"]], ["ok", "skipped"])
+        self.assertGreater(self.adapter.execution_count, executions)
+
+        summary = json.loads(summary_path.read_text())
+        adopted_run = Path(summary["selections"]["pop"]["chosen_run_dir"])
+        (adopted_run / "answer.txt").unlink()
+        executions = self.adapter.execution_count
+        repaired = run_stream()
+        self.assertEqual([row["status"] for row in repaired["tasks"]], ["ok", "skipped"])
+        self.assertGreater(self.adapter.execution_count, executions)
+        self.adapter.score.assert_not_called()
 
 
 if __name__ == "__main__":

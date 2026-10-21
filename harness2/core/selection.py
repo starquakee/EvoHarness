@@ -91,23 +91,35 @@ def _is_base(label: str) -> bool:
 
 
 def selection_pool(
-    mode: str, k: int, rollouts: dict[str, RunView], base: Sequence[RunView]
+    mode: str,
+    k: int,
+    rollouts: dict[str, RunView],
+    base: Sequence[RunView],
+    finals: Sequence[str] | None = None,
 ) -> dict[str, RunView]:
-    """The one home for selection-pool construction: exactly the k finals of `mode`.
+    """Build the finals-only pool, retaining each mode's existing candidate conventions.
 
-    Labels are derived from k -- agg1..aggk for the parallel mode, c1..ck for the sequential
-    one -- so the reference executions are not in the pool and there is no abstention by
-    construction. This is the published convention and the only pool this release builds.
+    Agg/seq keep their derived composed-final labels. Population must use its actual survivors:
+    those labels vary with selection and can legally include a reference `baseN` rollout.
 
-    `base` is accepted and deliberately unused: it is what the pool excludes, and the call
-    site passes it so that exclusion is visible where the pool is built.
+    `base` remains accepted for call compatibility; population base survivors are already
+    present in `rollouts`, so no separate reference pool is needed.
     """
     del base
-    labels = (
-        [f"agg{i}" for i in range(1, int(k) + 1)]
-        if mode == "agg"
-        else [f"c{t}" for t in range(1, int(k) + 1)]
-    )
+    if mode == "pop":
+        if finals is None:
+            raise ValueError("population selection requires the actual ModeResult.finals")
+        labels = list(finals)
+        if len(labels) != int(k):
+            raise ValueError(
+                f"population selection requires exactly {int(k)} survivors, got {len(labels)}"
+            )
+    else:
+        labels = (
+            [f"agg{i}" for i in range(1, int(k) + 1)]
+            if mode == "agg"
+            else [f"c{t}" for t in range(1, int(k) + 1)]
+        )
     return {lbl: rollouts[lbl] for lbl in labels if lbl in rollouts}
 
 

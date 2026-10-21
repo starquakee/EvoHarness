@@ -39,6 +39,7 @@ from .proposer import Proposer
 from .spec import BenchmarkAdapter, RunView
 
 MODES = ("agg", "seq")
+SUPPORTED_MODES = (*MODES, "pop")
 MODE_NAMES = {"agg": "parallel", "seq": "sequential"}
 _MODE_ALIASES = {"agg": "agg", "seq": "seq", "parallel": "agg", "sequential": "seq"}
 
@@ -111,8 +112,8 @@ class Namespace:
 def ns(
     benchmark: str, substrate: str, mode: str, k: int, *, seed: int | None = None, tag: str = ""
 ) -> str:
-    if mode not in MODES:
-        raise ValueError(f"unknown mode {mode!r}; the method has exactly two: {MODES}")
+    if mode not in SUPPORTED_MODES:
+        raise ValueError(f"unknown mode {mode!r}; expected one of {SUPPORTED_MODES}")
     if not substrate:
         raise ValueError(
             "namespace needs a substrate name ('oc' | 'cx'); an empty one would "
@@ -497,6 +498,7 @@ def _run_one_mode(
     """Run one recursion mode over the shared bases, select a final, and record it on `res`."""
     work_dir = n.task_dir(runs_root, task_id)
     lib_dir = mode_lib.context_dir() if mode_lib else None
+    selector_kwargs = {"selector": selector} if mode == "pop" else {}
     r = recursion.run_mode(
         mode,
         task_id,
@@ -508,9 +510,10 @@ def _run_one_mode(
         run_id_of=lambda lbl, _n=n: _n.run_id(task_id, lbl),
         base_tree=base_tree,
         library_dir=lib_dir,
+        **selector_kwargs,
     )
     res.modes[mode] = r.to_dict()
-    candidates = selection.selection_pool(mode, k, r.rollouts, base)
+    candidates = selection.selection_pool(mode, k, r.rollouts, base, finals=r.finals)
     if pool_policy == "finals" and k == 1:
         sel = selection.trivial_selection(
             task_id, k, mode, candidates, adapter=adapter, work_dir=work_dir
@@ -589,13 +592,13 @@ def run_task(
         raise ValueError(f"k must be positive, got {k!r}")
     if not modes or len(set(modes)) != len(modes):
         raise ValueError("modes must contain at least one distinct recursion mode")
-    unknown = sorted(set(modes) - set(MODES))
+    unknown = sorted(set(modes) - set(SUPPORTED_MODES))
     if unknown:
-        raise ValueError(f"unknown modes {unknown}; expected a subset of {MODES}")
+        raise ValueError(f"unknown modes {unknown}; expected a subset of {SUPPORTED_MODES}")
     if pool_policy != "finals":
         raise ValueError(
             f"unknown pool_policy {pool_policy!r}; this release builds exactly "
-            f"one selection pool, 'finals' (the k composed finals)"
+            f"one selection pool, 'finals' (the k final candidates)"
         )
     mode_libs = _resolve_libraries(library, libraries, modes)
     selector = _selector_for(adapter, prop, selector_prop)
