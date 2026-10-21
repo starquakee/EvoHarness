@@ -56,14 +56,20 @@ class LineageRecord:
     donors: tuple[str, ...] = ()
     trial: str = ""
     trial_kind: str = ""
+    deterministic_trial: str = ""
     survivor: str = ""
     fitness: int = 0
     outcome: str = "pending"
     reason: str = ""
 
+    @property
+    def trials(self) -> tuple[str, ...]:
+        return tuple(label for label in (self.trial, self.deterministic_trial) if label)
+
     def to_dict(self) -> dict:
         out = {key: value for key, value in self.__dict__.items()}
         out["donors"] = list(self.donors)
+        out["trials"] = list(self.trials)
         return out
 
 
@@ -112,14 +118,14 @@ def strategies_for(task_id: str, mode: str, k: int, version: str) -> tuple[Popul
     return tuple(strategy_for(task_id, mode, k, version, slot) for slot in range(1, k + 1))
 
 
-def choose_parent_and_donors(
+def choose_parent_and_donor_slots(
     strategy: PopulationStrategy,
     snapshot: Mapping[int, str],
     fitness: Mapping[int, int],
     *,
     generation: int,
-) -> tuple[str, tuple[str, ...]]:
-    """Select from one frozen slot->label snapshot, never from partially updated survivors."""
+) -> tuple[int, tuple[int, ...]]:
+    """Select slot identities from one frozen snapshot, retaining their fitness lineage."""
     generation = _validate_generation(generation)
     slots = sorted(snapshot)
     expected = list(range(1, strategy.k + 1))
@@ -155,8 +161,21 @@ def choose_parent_and_donors(
         raise ValueError(
             f"population k={strategy.k} cannot supply {strategy.donor_count} distinct donors"
         )
-    donors = rng.sample(donor_slots, strategy.donor_count)
-    return snapshot[parent_slot], tuple(snapshot[slot] for slot in donors)
+    return parent_slot, tuple(rng.sample(donor_slots, strategy.donor_count))
+
+
+def choose_parent_and_donors(
+    strategy: PopulationStrategy,
+    snapshot: Mapping[int, str],
+    fitness: Mapping[int, int],
+    *,
+    generation: int,
+) -> tuple[str, tuple[str, ...]]:
+    """Select from one frozen slot->label snapshot, never from partially updated survivors."""
+    parent_slot, donor_slots = choose_parent_and_donor_slots(
+        strategy, snapshot, fitness, generation=generation
+    )
+    return snapshot[parent_slot], tuple(snapshot[slot] for slot in donor_slots)
 
 
 def _in_scope(surface: SurfaceSpec, rel: str, scope: str) -> bool:
@@ -173,6 +192,24 @@ def _in_scope(surface: SurfaceSpec, rel: str, scope: str) -> bool:
     if scope == "plugins":
         return surface.plugin_dir is not None and rel.startswith(surface.plugin_dir.strip("/") + "/")
     raise ValueError(f"unknown population edit scope {scope!r}")
+
+
+def validate_edit_scope(
+    surface: SurfaceSpec,
+    parent: Tree,
+    proposed: Tree,
+    strategy: PopulationStrategy,
+) -> None:
+    """Reject edits outside the slot's fixed component scope."""
+    changed = (set(parent) | set(proposed)) - {
+        rel for rel in set(parent) & set(proposed) if parent[rel] == proposed[rel]
+    }
+    outside = sorted(rel for rel in changed if not _in_scope(surface, rel, strategy.edit_scope))
+    if outside:
+        raise ValueError(
+            f"population slot {strategy.slot} may edit only {strategy.edit_scope!r} components; "
+            f"out-of-scope changes: {', '.join(outside[:6])}"
+        )
 
 
 def component_crossover(

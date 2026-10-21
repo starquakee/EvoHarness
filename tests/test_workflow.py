@@ -60,11 +60,15 @@ class _BatchProposer(DemoProposer):
         groups = re.findall(r"^slot (\d+): ([A-Z, ]+)$", mission, re.M)
         winners = []
         for slot, candidate_ids in groups:
+            candidates = candidate_ids.split(", ")
             winner = next(
-                candidate_id
-                for candidate_id in candidate_ids.split(", ")
-                if "Total: 85.15"
-                in (context_dir / "candidates" / f"{candidate_id}.md").read_text()
+                (
+                    candidate_id
+                    for candidate_id in candidates
+                    if "Total: 85.15"
+                    in (context_dir / "candidates" / f"{candidate_id}.md").read_text()
+                ),
+                candidates[0],
             )
             winners.append((int(slot), winner))
         return winners
@@ -399,6 +403,150 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "k >= 2"):
             population.expected_rollouts(1)
 
+    def _fixed_population_strategies(self, k):
+        return tuple(
+            population.PopulationStrategy(
+                **(
+                    strategy.to_dict()
+                    | {
+                        "parent_selection": "current",
+                        "donor_count": 1,
+                        "edit_scope": "scripts",
+                    }
+                )
+            )
+            for strategy in population.strategies_for("ledger-1", "pop", k, "1")
+        )
+
+    def _population_result(self, proposer, k=2):
+        task_id = "ledger-1"
+        base = []
+        for slot in range(1, k + 1):
+            label = f"base{slot}"
+            run_id = f"population-{k}/{label}"
+            run_dir = self.adapter.execute(task_id, None, run_id)
+            base.append(
+                RunView(
+                    label=label,
+                    run_id=run_id,
+                    run_dir=run_dir,
+                    ok=True,
+                    delivered=self.adapter.delivered(run_dir),
+                )
+            )
+        base_tree = tree.read_tree(
+            self.adapter.substrate.surface(), self.adapter.base_harness()
+        )
+        return recursion.run_mode(
+            "pop",
+            task_id,
+            k,
+            base,
+            adapter=self.adapter,
+            prop=proposer,
+            selector=proposer,
+            work_dir=self.root / f"population-work-{k}",
+            run_id_of=lambda label: f"population-{k}/{label}",
+            base_tree=base_tree,
+        )
+
+    def test_population_recursion_budget_lineage_and_judge_isolation(self):
+        self.adapter.score = Mock()
+        for k in (2, 3):
+            with self.subTest(k=k):
+                proposer = _BatchProposer(self.proposer.spec)
+                result = self._population_result(proposer, k=k)
+                self.assertTrue(result.ok)
+                self.assertEqual((result.ledger.R, result.ledger.P), (4 * k, 2 * k + 2))
+                self.assertEqual(len(result.rollouts), 4 * k)
+                self.assertEqual(len(result.stages), 2 * k)
+                self.assertEqual(len(result.finals), k)
+                self.assertEqual(len(result.strategies), k)
+                self.assertEqual(len(result.comparisons), 2)
+                self.assertEqual(len(result.lineage), 3 * k)
+                self.assertEqual(result.ledger.session_usd, 2.5)
+                self.assertTrue(all(comparison.ok for comparison in result.comparisons))
+                generated = [record for record in result.lineage if record.generation]
+                self.assertEqual(sum(len(record.trials) for record in generated), 3 * k)
+                self.assertEqual(
+                    sum(bool(record.deterministic_trial) for record in generated), k
+                )
+                for label in result.finals:
+                    self.assertIn(label, result.trees)
+                    self.assertIn(label, result.rollouts)
+                    self.assertTrue(
+                        (self.root / f"population-work-{k}/harnesses" / label).is_dir()
+                    )
+                record = result.to_dict()
+                self.assertEqual(record["ledger"]["expected_P"], 2 * k + 2)
+                self.assertEqual(len(record["lineage"]), 3 * k)
+                self.assertEqual(len(record["comparisons"]), 2)
+                self.assertEqual(len(record["fitness"]), k)
+                json.dumps(record)
+        self.adapter.score.assert_not_called()
+
+    def test_population_invalid_proposal_retries_without_extra_session(self):
+        class RepairPopulationProposer(_BatchProposer):
+            def call(self, mission, context_dir, label, **kwargs):
+                script = Path(context_dir) / "harness/scripts/summarize.py"
+                if label == "g1s1.a1":
+                    script.write_text("def broken(:\n", encoding="utf-8")
+                    reply = Reply(
+                        label,
+                        "invalid edit",
+                        True,
+                        cost_usd=1,
+                        attempts=1,
+                        workspace=script.parent.parent,
+                    )
+                    self._calls.append(reply)
+                    return reply
+                if label == "g1s1.a2":
+                    script.write_text(BASE_SCRIPT, encoding="utf-8")
+                reply = super().call(mission, context_dir, label, **kwargs)
+                if label == "g1s1.a2":
+                    reply.cost_usd = 2
+                return reply
+
+        proposer = RepairPopulationProposer(self.proposer.spec)
+        with patch.object(
+            population,
+            "strategies_for",
+            return_value=self._fixed_population_strategies(2),
+        ):
+            result = self._population_result(proposer)
+        stage = next(stage for stage in result.stages if stage.label == "g1s1")
+        self.assertEqual((stage.fell_back, stage.attempts, stage.usd), (False, 2, 3))
+        self.assertEqual(result.ledger.labels("session").count("g1s1"), 1)
+        self.assertEqual((result.ledger.R, result.ledger.P), (8, 6))
+        self.assertIn("g1s1.a1", [reply.label for reply in proposer._calls])
+        self.assertIn("g1s1.a2", [reply.label for reply in proposer._calls])
+
+    def test_population_failed_trial_preserves_parent_within_budget(self):
+        original_execute = self.adapter.execute
+
+        def fail_one_trial(task_id, harness_dir, run_id, **kwargs):
+            if run_id.endswith("/g1s1"):
+                raise RuntimeError("trial execution lost")
+            return original_execute(task_id, harness_dir, run_id, **kwargs)
+
+        proposer = _BatchProposer(self.proposer.spec)
+        with (
+            patch.object(
+                population,
+                "strategies_for",
+                return_value=self._fixed_population_strategies(2),
+            ),
+            patch.object(self.adapter, "execute", side_effect=fail_one_trial),
+        ):
+            result = self._population_result(proposer)
+        outcome = result.comparisons[0].outcomes[0]
+        self.assertFalse(result.rollouts["g1s1"].ok)
+        self.assertEqual(outcome.survivor, "base1")
+        self.assertEqual(outcome.outcome, "parent_fallback")
+        self.assertIn("g1s1", outcome.error)
+        self.assertEqual((result.ledger.R, result.ledger.P), (8, 6))
+        self.assertEqual(len(result.finals), 2)
 
     def _batch_inputs(self):
         rollouts = {

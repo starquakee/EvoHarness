@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Budget accounting: R = 4k rollouts and P = 3k improvement stages.
+"""Budget accounting: R = 4k; P = 3k for agg/seq and 2k+2 for population.
 
 Base executions count toward each mode. Retries are separate invocation counts;
 selection and reflection are recorded outside this ledger.
@@ -22,14 +22,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from . import population
 
-def expected_rollouts(k: int) -> int:
-    """R = 4k: k shared base + 2k candidates + k finals."""
+
+def expected_rollouts(k: int, mode: str = "agg") -> int:
+    """Every mode uses k shared base rollouts and 3k trial/final rollouts."""
+    if mode == "pop":
+        return population.expected_rollouts(k)
     return 4 * int(k)
 
 
-def expected_sessions(k: int) -> int:
-    """P = 3k: k INV + k DOM + k compositions (parallel: agg1..aggk; sequential: c1..ck)."""
+def expected_sessions(k: int, mode: str = "agg") -> int:
+    """Population replaces k composition sessions with two batch comparisons."""
+    if mode == "pop":
+        return population.expected_sessions(k)
     return 3 * int(k)
 
 
@@ -87,10 +93,9 @@ class Ledger:
         return [e.label for e in self.entries if e.kind == kind]
 
     def assert_identity(self) -> None:
-        """Raise unless the recorded entries show exactly R=4k and P=3k with no duplicate
-        label. Duplicates are checked before the counts, because a duplicate can satisfy them.
-        """
-        want_r, want_p = expected_rollouts(self.k), expected_sessions(self.k)
+        """Raise unless entries meet this mode's budgets with no duplicate labels."""
+        want_r = expected_rollouts(self.k, self.mode)
+        want_p = expected_sessions(self.k, self.mode)
         rl, sl = self.labels("rollout"), self.labels("session")
         dupes = sorted(
             {label for label in rl if rl.count(label) > 1}
@@ -118,12 +123,12 @@ class Ledger:
             "task_id": self.task_id,
             "k": self.k,
             "R": self.R,
-            "expected_R": expected_rollouts(self.k),
+            "expected_R": expected_rollouts(self.k, self.mode),
             "P": self.P,
             "session_attempts": sum(
                 entry.attempts for entry in self.entries if entry.kind == "session"
             ),
-            "expected_P": expected_sessions(self.k),
+            "expected_P": expected_sessions(self.k, self.mode),
             "usd": self.usd,
             "rollout_usd": self.rollout_usd,
             "session_usd": self.session_usd,

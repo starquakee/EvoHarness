@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .population import PopulationStrategy
 from .spec import BenchPrompts
 from .tree import SurfaceSpec
 
@@ -1097,6 +1098,60 @@ def select(bp: BenchPrompts, n: int, pool_kind: str = "mixed", assets_note: str 
                 "with the specific thing that cost it the pick. If you rejected a candidate on "
                 "CONFORMANCE, say which field, column or section.\n</why>\n\n"
                 "```choice\n<the id of the single candidate to submit>\n```",
+            ]
+        )
+    )
+
+
+def population_propose(
+    bp: BenchPrompts,
+    surface: SurfaceSpec | str,
+    *,
+    strategy: PopulationStrategy,
+    generation: int,
+    parent: str,
+    donors: tuple[str, ...],
+) -> str:
+    """One fixed-strategy structured edit from frozen parent/donor evidence."""
+    st = _st(surface)
+    return _tidy(
+        "\n\n".join(
+            [
+                f"You are adapting population slot {strategy.slot} of {strategy.k} in "
+                f"generation {generation} of 2. Produce one structured-edit challenger.",
+                _work(bp),
+                _lens(bp),
+                "# YOUR FIXED STRATEGY\n\n"
+                f"Parent selection: {strategy.parent_selection}\n"
+                f"Donors: {strategy.donor_count}\n"
+                f"Edit scope: {strategy.edit_scope}\n"
+                f"CR: {strategy.cr}\n"
+                f"Component crossover: {strategy.crossover}\n\n"
+                "This profile is fixed for this slot. Do not choose another strategy or adapt it "
+                "from earlier outcomes. CR and crossover govern the separate deterministic trial; "
+                "your task is the structured edit.",
+                "# FROZEN PARENT AND DONOR EVIDENCE\n\n"
+                f"The selected parent is `{parent}`; its donor labels are {', '.join(donors)}. "
+                "`context/harness/` contains the parent you are editing. `context/pool/` contains "
+                "the parent and donor harnesses with their execution evidence. Compare their named "
+                "files and execution contrasts. Use differences as discrete evidence, never as "
+                "numeric vectors or text arithmetic.",
+                "# YOUR JOB\n\n"
+                f"Change only components in the fixed `{strategy.edit_scope}` edit scope. Keep the "
+                "parent when the evidence does not support a scoped change. Every edit must be "
+                "traceable to a parent/donor file difference, an execution contrast, or a concrete "
+                "failure in the supplied evidence.",
+                GENERALIZE.format(
+                    domain_word=bp.domain_word, DOMAIN_WORD_UPPER=bp.domain_word.upper()
+                ),
+                *(
+                    [f"# WHAT GOOD PROCESS LOOKS LIKE HERE\n\n{bp.yardstick.strip()}"]
+                    if bp.yardstick.strip()
+                    else []
+                ),
+                ANSWER_FREE,
+                EVIDENCE_BOUNDARY,
+                st.surface_md,
             ]
         )
     )

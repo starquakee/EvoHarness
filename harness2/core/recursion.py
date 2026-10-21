@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Parallel and sequential task-level recursion.
+"""Parallel, sequential, and fixed-strategy discrete population recursion.
 
-Each mode schedules 4k rollouts and 3k improvement stages, including shared base
-executions. Invalid proposals receive one retry before inheriting the current harness.
+Every mode schedules 4k rollouts, including shared base executions. Invalid proposals
+receive one retry before inheriting the current harness.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from .. import config
-from . import context, prompts
+from . import context, population, prompts, selection
 from . import tree as harness_tree
 from .ledger import Ledger
 from .proposer import Proposer, ProposerError
@@ -67,6 +67,10 @@ class ModeResult:
     ledger: Ledger | None = None
     similarity: dict | None = None
     errors: list[str] = field(default_factory=list)
+    strategies: list[population.PopulationStrategy] = field(default_factory=list)
+    lineage: list[population.LineageRecord] = field(default_factory=list)
+    comparisons: list[selection.BatchComparison] = field(default_factory=list)
+    fitness: dict[int, int] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -77,7 +81,7 @@ class ModeResult:
         return [s.label for s in self.stages if s.fell_back]
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "mode": self.mode,
             "task_id": self.task_id,
             "k": self.k,
@@ -103,6 +107,16 @@ class ModeResult:
             "ledger": self.ledger.to_dict() if self.ledger else None,
             "errors": self.errors,
         }
+        if self.mode == "pop":
+            out.update(
+                {
+                    "strategies": [strategy.to_dict() for strategy in self.strategies],
+                    "lineage": [record.to_dict() for record in self.lineage],
+                    "comparisons": [comparison.to_dict() for comparison in self.comparisons],
+                    "fitness": {str(slot): value for slot, value in sorted(self.fitness.items())},
+                }
+            )
+        return out
 
 
 def _accept_tree(
@@ -147,6 +161,7 @@ def _run_stage(
     library_dir: Path | None,
     pool: Sequence[tuple[str, Path, RunView | None]] = (),
     decisions: dict[str, str] | None = None,
+    extra_validation: Callable[[harness_tree.Tree], None] | None = None,
 ) -> Stage:
     """Build evidence, propose an edit, and retry an invalid proposal once."""
     surface = adapter.substrate.surface()
@@ -223,7 +238,13 @@ def _run_stage(
             )
             continue
 
-        kept, err = _accept_tree(surface, adapter, new, fallback, label)
+        try:
+            if extra_validation is not None:
+                extra_validation(new)
+        except ValueError as exc:
+            err = str(exc)
+        else:
+            kept, err = _accept_tree(surface, adapter, new, fallback, label)
         if err:
             harness_tree.write_tree(surface, new, tree.root / "harness")
             continue
@@ -566,13 +587,280 @@ def run_sequential(
     return result
 
 
+@dataclass(frozen=True)
+class _PopulationPlan:
+    strategy: population.PopulationStrategy
+    parent_slot: int
+    parent: str
+    donors: tuple[str, ...]
+    parent_fitness: int
+    llm_label: str
+    deterministic_label: str = ""
+
+    @property
+    def slot(self) -> int:
+        return self.strategy.slot
+
+    @property
+    def trials(self) -> tuple[str, ...]:
+        return tuple(
+            label for label in (self.llm_label, self.deterministic_label) if label
+        )
+
+
+def run_population(
+    task_id: str,
+    k: int,
+    base: Sequence[RunView],
+    *,
+    adapter: BenchmarkAdapter,
+    prop: Proposer,
+    work_dir: Path,
+    run_id_of: Callable[[str], str],
+    base_tree: harness_tree.Tree,
+    library_dir: Path | None = None,
+    selector: Proposer | None = None,
+    propose_workers: int = PHASE_WIDTH,
+    rollout_workers: int = PHASE_WIDTH,
+    strategy_version: str = "1",
+) -> ModeResult:
+    """Run two frozen generations with one LLM trial per slot and k crossover trials."""
+    k = int(k)
+    strategies = population.strategies_for(task_id, "pop", k, strategy_version)
+    expected_base = [f"base{slot}" for slot in range(1, k + 1)]
+    if [rollout.label for rollout in base] != expected_base:
+        raise ValueError(f"population mode needs ordered base rollouts {expected_base}")
+
+    surface = adapter.substrate.surface()
+    work_dir = Path(work_dir)
+    ledger = Ledger(mode="pop", task_id=task_id, k=k)
+    result = ModeResult(
+        mode="pop",
+        task_id=task_id,
+        k=k,
+        ledger=ledger,
+        strategies=list(strategies),
+        lineage=population.initial_lineage(k),
+        fitness={slot: 0 for slot in range(1, k + 1)},
+    )
+    for rollout in base:
+        ledger.rollout(rollout.label)
+        result.rollouts[rollout.label] = rollout
+        result.trees[rollout.label] = dict(base_tree)
+        harness_tree.write_tree(
+            surface, base_tree, work_dir / "harnesses" / rollout.label
+        )
+
+    benchmark_prompts = resolve_prompts(adapter, task_id)
+    comparator = selector or prop
+    deterministic_slots = population.deterministic_trial_schedule(
+        task_id, "pop", k, strategy_version
+    )
+    snapshot = {slot: base[slot - 1].label for slot in range(1, k + 1)}
+    fitness = {slot: 0 for slot in range(1, k + 1)}
+
+    for generation in (1, 2):
+        parent_snapshot = dict(snapshot)
+        fitness_snapshot = dict(fitness)
+        generation_trees = {
+            label: dict(result.trees[label]) for label in set(parent_snapshot.values())
+        }
+        generation_rollouts = dict(result.rollouts)
+        plans = []
+        for strategy in strategies:
+            parent_slot, donor_slots = population.choose_parent_and_donor_slots(
+                strategy, parent_snapshot, fitness_snapshot, generation=generation
+            )
+            llm_label = f"g{generation}s{strategy.slot}"
+            deterministic_label = (
+                llm_label + "x" if strategy.slot in deterministic_slots[generation] else ""
+            )
+            plans.append(
+                _PopulationPlan(
+                    strategy=strategy,
+                    parent_slot=parent_slot,
+                    parent=parent_snapshot[parent_slot],
+                    donors=tuple(parent_snapshot[slot] for slot in donor_slots),
+                    parent_fitness=fitness_snapshot[parent_slot],
+                    llm_label=llm_label,
+                    deterministic_label=deterministic_label,
+                )
+            )
+
+        def run_llm(plan: _PopulationPlan) -> Stage:
+            parent_tree = generation_trees[plan.parent]
+            evidence_labels = tuple(dict.fromkeys((plan.parent, *plan.donors)))
+            evidence = [generation_rollouts[label] for label in evidence_labels]
+            pool = [
+                (
+                    label,
+                    work_dir / "harnesses" / label,
+                    generation_rollouts.get(label),
+                )
+                for label in evidence_labels
+            ]
+            return _run_stage(
+                label=plan.llm_label,
+                dim="POP",
+                job=prompts.population_propose(
+                    benchmark_prompts,
+                    surface,
+                    strategy=plan.strategy,
+                    generation=generation,
+                    parent=plan.parent,
+                    donors=plan.donors,
+                ),
+                fallback=parent_tree,
+                adapter=adapter,
+                prop=prop,
+                ctx_dir=work_dir / "context",
+                task_id=task_id,
+                rollouts=evidence,
+                harness_dir=work_dir / "harnesses" / plan.parent,
+                library_dir=library_dir,
+                pool=pool,
+                extra_validation=lambda new: population.validate_edit_scope(
+                    surface, parent_tree, new, plan.strategy
+                ),
+            )
+
+        with ThreadPoolExecutor(
+            max_workers=min(len(plans), propose_workers)
+        ) as pool_x:
+            stages = list(pool_x.map(run_llm, plans))
+        _record_sessions(ledger, stages)
+        result.stages.extend(stages)
+
+        trial_trees = {
+            plan.llm_label: stage.tree for plan, stage in zip(plans, stages)
+        }
+        invalid: dict[str, str] = {}
+        for plan in plans:
+            if not plan.deterministic_label:
+                continue
+            parent_tree = generation_trees[plan.parent]
+            crossed = dict(parent_tree)
+            try:
+                crossed = population.component_crossover(
+                    surface,
+                    parent_tree,
+                    [generation_trees[label] for label in plan.donors],
+                    plan.strategy,
+                    generation=generation,
+                )
+                population.validate_edit_scope(
+                    surface, parent_tree, crossed, plan.strategy
+                )
+                _kept, error = _accept_tree(
+                    surface,
+                    adapter,
+                    crossed,
+                    parent_tree,
+                    plan.deterministic_label,
+                )
+                if error:
+                    raise ValueError(error)
+            except ValueError as exc:
+                invalid[plan.deterministic_label] = str(exc)[:400]
+            trial_trees[plan.deterministic_label] = crossed
+
+        result.trees.update(trial_trees)
+        roll_items = [
+            (label, trial_trees[label])
+            for plan in plans
+            for label in plan.trials
+            if label not in invalid
+        ]
+        rolled = _roll_many(
+            adapter,
+            ledger,
+            task_id,
+            roll_items,
+            run_id_of,
+            work_dir,
+            width=rollout_workers,
+        )
+        for label, error in invalid.items():
+            harness_tree.write_tree(
+                surface, trial_trees[label], work_dir / "harnesses" / label
+            )
+            rolled[label] = RunView(
+                label=label,
+                run_id=run_id_of(label),
+                run_dir=work_dir / "missing" / label,
+                ok=False,
+                delivered=False,
+                error=f"invalid deterministic trial: {error}",
+            )
+            ledger.rollout(label)
+        result.rollouts.update(rolled)
+
+        comparison = selection.run_batch_comparison(
+            task_id,
+            k,
+            generation,
+            [
+                selection.SlotCandidates(plan.slot, plan.parent, plan.trials)
+                for plan in plans
+            ],
+            result.rollouts,
+            adapter=adapter,
+            prop=comparator,
+            work_dir=work_dir,
+        )
+        ledger.session(
+            comparison.session,
+            comparison.usd,
+            cached=comparison.cached,
+            attempts=comparison.attempts,
+        )
+        result.comparisons.append(comparison)
+
+        outcomes = {outcome.slot: outcome for outcome in comparison.outcomes}
+        next_snapshot: dict[int, str] = {}
+        next_fitness: dict[int, int] = {}
+        generation_lineage = []
+        for plan in plans:
+            outcome = outcomes[plan.slot]
+            accepted = outcome.accepted
+            next_snapshot[plan.slot] = outcome.survivor
+            next_fitness[plan.slot] = population.survivor_fitness(
+                plan.parent_fitness, accepted
+            )
+            generation_lineage.append(
+                population.LineageRecord(
+                    slot=plan.slot,
+                    generation=generation,
+                    parent=plan.parent,
+                    donors=plan.donors,
+                    trial=plan.llm_label,
+                    trial_kind="llm",
+                    deterministic_trial=plan.deterministic_label,
+                    survivor=outcome.survivor,
+                    fitness=next_fitness[plan.slot],
+                    outcome=outcome.outcome,
+                    reason=outcome.reason or outcome.error,
+                )
+            )
+        result.lineage.extend(generation_lineage)
+        snapshot = next_snapshot
+        fitness = next_fitness
+        result.fitness = dict(fitness)
+
+    result.finals = [snapshot[slot] for slot in range(1, k + 1)]
+    ledger.assert_identity()
+    return result
+
+
 def run_mode(mode: str, *a, **kw) -> ModeResult:
-    """Dispatch on the on-disk mode token: "agg" (parallel) or "seq" (sequential)."""
+    """Dispatch on the on-disk mode token: agg, seq, or pop."""
     if mode == "agg":
         return run_parallel(*a, **kw)
     if mode == "seq":
         return run_sequential(*a, **kw)
+    if mode == "pop":
+        return run_population(*a, **kw)
     raise ValueError(
-        f"unknown mode {mode!r}; the method has exactly two: "
-        f"'agg' (parallel) and 'seq' (sequential)"
+        f"unknown mode {mode!r}; expected 'agg' (parallel), 'seq' (sequential), "
+        f"or 'pop' (population)"
     )

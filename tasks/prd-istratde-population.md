@@ -96,12 +96,12 @@ The first version must preserve the existing modes and Harness²'s ground-truth-
 **Description:** As a researcher, I want a complete population recursion implementation so that fixed strategies can evolve Harnesses under a bounded budget.
 
 **Acceptance Criteria:**
-- [ ] Add `run_population` and dispatch for `pop` in `harness2/core/recursion.py` while leaving agg/seq behavior unchanged.
-- [ ] Each generation freezes parents, generates and executes all trials, then performs batch survivor selection; no thread writes survivors early.
-- [ ] Record fixed strategies, parents, donors, trials, survivors, surrogate fitness, comparison outcomes, and lineage in `ModeResult`.
-- [ ] Update `harness2/core/ledger.py` for mode-aware budgets and include comparison sessions, costs, and attempts.
-- [ ] Tests cover budget identities, invalid proposal retry, failed-trial parent retention, exactly k final labels, and judge isolation.
-- [ ] Focused unittest command passes.
+- [x] Add `run_population` and dispatch for `pop` in `harness2/core/recursion.py` while leaving agg/seq behavior unchanged.
+- [x] Each generation freezes parents, generates and executes all trials, then performs batch survivor selection; no thread writes survivors early.
+- [x] Record fixed strategies, parents, donors, trials, survivors, surrogate fitness, comparison outcomes, and lineage in `ModeResult`.
+- [x] Update `harness2/core/ledger.py` for mode-aware budgets and include comparison sessions, costs, and attempts.
+- [x] Tests cover budget identities, invalid proposal retry, failed-trial parent retention, exactly k final labels, and judge isolation.
+- [x] Focused unittest command passes.
 
 ### US-004: Scheduling, final selection, Library, and resume integration
 

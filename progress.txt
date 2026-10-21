@@ -56,3 +56,26 @@ Source PRD: tasks/prd-istratde-population.md
   - An invalid parent or trial removes only that slot from the model batch and preserves its parent. Missing, unknown, malformed, or `UNCERTAIN` choices also preserve the relevant parent; valid remaining slots still use the same single batch call.
   - `comparison.json` is written after the comparator call so anonymous ID mappings and outcomes never enter the model's evidence context.
 ---
+
+## 2026-10-21 12:19:00 CST - US-003
+- Implemented two-generation population recursion with frozen parent snapshots, fixed scoped strategies, parallel LLM trials, deterministic component-crossover trials, batch survivor comparison, surrogate fitness, complete lineage, base-survivor materialization, and mode-aware Ledger accounting. Existing agg/seq summary fields and call paths remain unchanged.
+- Files changed:
+  - `harness2/core/population.py`
+  - `harness2/core/prompts.py`
+  - `harness2/core/recursion.py`
+  - `harness2/core/ledger.py`
+  - `tests/test_workflow.py`
+  - `tasks/prd-istratde-population.md`
+  - `prd.json`
+  - `progress.txt`
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -k population -v` — 6 population tests passed.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -v` — 16 tests passed, including existing agg/seq budget, failure, Library, and resume coverage.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -c "from pathlib import Path; import harness2.core.population, harness2.core.prompts, harness2.core.ledger, harness2.core.recursion; [compile(Path(name).read_text(), name, 'exec') for name in ('harness2/core/population.py', 'harness2/core/prompts.py', 'harness2/core/ledger.py', 'harness2/core/recursion.py', 'tests/test_workflow.py')]"` — import and compile validation passed.
+  - `git diff --check` — passed.
+- **Learnings for future iterations:**
+  - Population LLM labels are `g{generation}s{slot}`; the scheduled deterministic sibling adds `x`. `ModeResult.finals` is slot-ordered and may legally contain `baseN`; every such label has a tree, materialized harness, and RunView.
+  - `run_population` accepts an optional `selector` and `strategy_version` (currently `1`). US-004 must pass the existing selector and actual final labels through scheduling; US-005 must wire the independent configured strategy version.
+  - Population-only strategy, lineage, comparison, and fitness fields are added to `ModeResult.to_dict()` only for `pop`, leaving agg/seq summary schemas unchanged.
+  - Invalid deterministic crossovers become failed trial RunViews without `adapter.execute`; they still consume the deterministic rollout budget and make the comparator preserve that slot's parent.
+---
