@@ -14,6 +14,7 @@
 
 """Focused regressions for the paper's execution, evidence, and adoption contracts."""
 
+import io
 import json
 import re
 import tempfile
@@ -22,7 +23,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from harness2 import config
-from harness2.core import context, judge, population, recursion, runmark, schedule, selection, tree
+from harness2.cli import _common as cli_common
+from harness2.cli import demo as demo_cli
+from harness2.cli import judge as judge_cli
+from harness2.cli import report as report_cli
+from harness2.cli import run_sweep
+from harness2.core import context, judge, population, recursion, report, runmark, schedule, selection, tree
 from harness2.core.library import Library
 from harness2.core.proposer import Proposer, ProposerError, Reply
 from harness2.core.spec import RunView, resolve_channel_model
@@ -874,6 +880,214 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([row["status"] for row in repaired["tasks"]], ["ok", "skipped"])
         self.assertGreater(self.adapter.execution_count, executions)
         self.adapter.score.assert_not_called()
+
+    def test_population_mode_parsing_and_demo_defaults(self):
+        self.assertEqual(schedule.mode_token("population"), "pop")
+        self.assertEqual(schedule.mode_token("pop"), "pop")
+        self.assertEqual(cli_common.parse_modes("population"), ("pop",))
+        self.assertEqual(cli_common.parse_modes("pop,parallel"), ("agg", "pop"))
+        self.assertEqual(cli_common.parse_modes("sequential,population"), ("seq", "pop"))
+        self.assertEqual(cli_common.parse_modes(cli_common.MODES_DEFAULT), ("agg",))
+        self.assertEqual(cli_common.mode_label("pop"), "population")
+        self.assertIn("population", run_sweep._build_parser().format_help())
+
+        completed = {"done": 0, "failed": 0, "tasks": []}
+        with patch.object(demo_cli, "run_domain", return_value=completed) as run_domain:
+            for mode, expected in (
+                ("both", ("agg", "seq")),
+                ("population", ("pop",)),
+                ("pop", ("pop",)),
+            ):
+                with self.subTest(mode=mode), patch("sys.stdout", new_callable=io.StringIO):
+                    status = demo_cli.main(
+                        ["--output", str(self.root / "demo-cli"), "--mode", mode]
+                    )
+                self.assertEqual(status, 0)
+                self.assertEqual(run_domain.call_args.kwargs["modes"], expected)
+
+    def test_population_rejects_small_k_before_execution_or_model_calls(self):
+        with (
+            patch.object(demo_cli, "DemoAdapter") as adapter_type,
+            patch.object(demo_cli, "DemoProposer") as proposer_type,
+        ):
+            for mode in ("population", "pop"):
+                with self.subTest(mode=mode), patch("sys.stderr", new_callable=io.StringIO) as err:
+                    with self.assertRaises(SystemExit) as caught:
+                        demo_cli.main(["--k", "1", "--mode", mode])
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn("--k must be at least 2 for population mode", err.getvalue())
+            adapter_type.assert_not_called()
+            proposer_type.assert_not_called()
+
+        with (
+            patch.object(cli_common, "make_adapter") as make_adapter,
+            patch.object(run_sweep, "Proposer") as proposer_type,
+            patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            status = run_sweep.main(
+                ["--bench", "jb", "--k", "1", "--mode", "population", "--dry-run"]
+            )
+        self.assertEqual(status, 1)
+        self.assertIn("--k must be at least 2", err.getvalue())
+        make_adapter.assert_not_called()
+        proposer_type.assert_not_called()
+
+        with patch.object(self.adapter, "execute") as execute:
+            with self.assertRaisesRegex(ValueError, "population mode requires k >= 2"):
+                schedule.run_task(
+                    "ledger-1",
+                    1,
+                    adapter=self.adapter,
+                    prop=self.proposer,
+                    runs_root=self.adapter.spec.runs_root,
+                    modes=("pop",),
+                )
+        execute.assert_not_called()
+        self.assertEqual(self.proposer._calls, [])
+
+    def test_population_dry_run_identity_and_configured_strategy_version(self):
+        with (
+            patch.object(cli_common, "make_adapter", return_value=self.adapter),
+            patch.object(run_sweep, "Proposer") as proposer_type,
+            patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            status = run_sweep.main(
+                [
+                    "--bench",
+                    "jb",
+                    "--k",
+                    "2",
+                    "--mode",
+                    "parallel,population",
+                    "--dry-run",
+                ]
+            )
+        self.assertEqual(status, 0)
+        self.assertIn("modes=parallel,population", out.getvalue())
+        self.assertIn("namespace[parallel]: demo-oc-agg2", out.getvalue())
+        self.assertIn("namespace[population]: demo-oc-pop2", out.getvalue())
+        proposer_type.assert_not_called()
+        self.assertEqual(self.adapter.execution_count, 0)
+
+        legacy_args = run_sweep._build_parser().parse_args(["--bench", "jb"])
+        legacy_dir = self.root / "identity-legacy"
+        run_sweep._check_identity(self.adapter, legacy_args, legacy_dir)
+        legacy = json.loads((legacy_dir / "config.json").read_text())
+        self.assertNotIn("population_strategy_version", legacy)
+        run_sweep._check_identity(self.adapter, legacy_args, legacy_dir)
+
+        pop_args = run_sweep._build_parser().parse_args(
+            ["--bench", "jb", "--k", "2", "--mode", "parallel,pop"]
+        )
+        pop_dir = self.root / "identity-pop"
+        run_sweep._check_identity(self.adapter, pop_args, pop_dir)
+        pop_identity = json.loads((pop_dir / "config.json").read_text())
+        self.assertEqual(
+            pop_identity["population_strategy_version"], config.POPULATION_STRATEGY_VERSION
+        )
+        with patch.object(config, "POPULATION_STRATEGY_VERSION", "different-version"):
+            with self.assertRaisesRegex(ValueError, "different models or tasks"):
+                run_sweep._check_identity(self.adapter, pop_args, pop_dir)
+
+        proposer = _BatchProposer(self.proposer.spec)
+        with patch.object(config, "POPULATION_STRATEGY_VERSION", "configured-test-version"):
+            result = self._population_result(proposer)
+        self.assertEqual(
+            {strategy.version for strategy in result.strategies}, {"configured-test-version"}
+        )
+
+    def test_population_judge_report_base_survivor_and_comparison_costs(self):
+        selection_record = {
+            "task_id": "ledger-1",
+            "mode": "pop",
+            "k": 2,
+            "ok": True,
+            "chosen_label": "base1",
+            "chosen_run_id": "demo-oc-pop2/ledger-1/base1",
+            "chosen_run_dir": str(self.root / "selected-base"),
+            "chosen_is_base": True,
+            "usd": 0.25,
+        }
+        summary = {
+            "task_id": "ledger-1",
+            "selections": {"pop": selection_record},
+            "modes": {
+                "pop": {
+                    "ok": True,
+                    "stages": [{"usd": 1.5}],
+                    "comparisons": [{"usd": 1.25}, {"usd": 0.75}],
+                    "fell_back": [],
+                }
+            },
+        }
+        ns_dir = cli_common.runs_root_for(self.adapter) / cli_common.summary_namespace(
+            self.adapter, 2, seed=None
+        )
+        task_dir = ns_dir / "ledger-1"
+        task_dir.mkdir(parents=True)
+        (task_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+        judged = []
+
+        def fake_judge(_adapter, selections, *, parallel):
+            judged.extend(selections)
+            return [
+                judge.Scored(
+                    task_id="ledger-1",
+                    mode=selections[0]["mode"],
+                    k=2,
+                    label="base1",
+                    run_id=selections[0]["chosen_run_id"],
+                    chosen_is_base=True,
+                    n_passed=1,
+                    n_criteria=1,
+                    all_pass=True,
+                )
+            ]
+
+        with (
+            patch.object(cli_common, "make_adapter", return_value=self.adapter),
+            patch.object(judge_cli.config, "validate_models"),
+            patch.object(judge_cli.J, "judge_selections", side_effect=fake_judge),
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            status = judge_cli.main(["--bench", "jb", "--k", "2", "--mode", "population"])
+        self.assertEqual(status, 0)
+        self.assertEqual([row["mode"] for row in judged], ["pop"])
+        self.assertTrue((ns_dir / "judged.json").is_file())
+
+        with (
+            patch.object(cli_common, "make_adapter", return_value=self.adapter),
+            patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            status = report_cli.main(["--bench", "jb", "--k", "2", "--mode", "pop"])
+        self.assertEqual(status, 0)
+        rendered = out.getvalue()
+        self.assertIn("population k=2", rendered)
+        self.assertIn("final 0 / candidate 0 / base 1", rendered)
+        self.assertIn("$3.75", rendered)
+        self.assertNotIn("outside the published pool", rendered)
+        self.assertNotIn("WARNING", rendered)
+
+        non_base = judge.Scored(
+            task_id="ledger-2",
+            mode="pop",
+            k=2,
+            label="g2s1",
+            run_id="run-g2s1",
+            chosen_is_base=False,
+            n_passed=1,
+            n_criteria=1,
+        )
+        self.assertEqual(report._kind(non_base), "final")
+
+    def test_report_noise_floor_requires_parallel_and_sequential(self):
+        parallel = report.Summary(mode="agg", k=1, n=1, score=50, chose_final=1)
+        sequential = report.Summary(mode="seq", k=1, n=1, score=55, chose_final=1)
+        population = report.Summary(mode="pop", k=1, n=1, score=55, chose_final=1)
+        mixed = report.render([parallel, population])
+        self.assertNotIn("NOISE FLOOR", mixed)
+        both = report.render([parallel, sequential])
+        self.assertIn("NOISE FLOOR", both)
 
 
 if __name__ == "__main__":

@@ -40,18 +40,26 @@ from .spec import BenchmarkAdapter, RunView
 
 MODES = ("agg", "seq")
 SUPPORTED_MODES = (*MODES, "pop")
-MODE_NAMES = {"agg": "parallel", "seq": "sequential"}
-_MODE_ALIASES = {"agg": "agg", "seq": "seq", "parallel": "agg", "sequential": "seq"}
+MODE_NAMES = {"agg": "parallel", "seq": "sequential", "pop": "population"}
+_MODE_ALIASES = {
+    "agg": "agg",
+    "seq": "seq",
+    "pop": "pop",
+    "parallel": "agg",
+    "sequential": "seq",
+    "population": "pop",
+}
 
 ROLLOUT_PARALLEL = recursion.PHASE_WIDTH
 
 
 def mode_token(name: str) -> str:
-    """The on-disk token for a mode name: parallel/agg -> "agg", sequential/seq -> "seq"."""
+    """Return the on-disk token for a public mode name or existing token."""
     key = str(name or "").strip().lower()
     if key not in _MODE_ALIASES:
         raise ValueError(
-            f"unknown mode {name!r}; expected parallel | sequential (or the on-disk tokens {MODES})"
+            f"unknown mode {name!r}; expected parallel | sequential | population "
+            f"(or the on-disk tokens {SUPPORTED_MODES})"
         )
     return _MODE_ALIASES[key]
 
@@ -595,6 +603,8 @@ def run_task(
     unknown = sorted(set(modes) - set(SUPPORTED_MODES))
     if unknown:
         raise ValueError(f"unknown modes {unknown}; expected a subset of {SUPPORTED_MODES}")
+    if "pop" in modes and int(k) < 2:
+        raise ValueError(f"population mode requires k >= 2, got {k}")
     if pool_policy != "finals":
         raise ValueError(
             f"unknown pool_policy {pool_policy!r}; this release builds exactly "

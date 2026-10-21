@@ -622,10 +622,13 @@ def run_population(
     selector: Proposer | None = None,
     propose_workers: int = PHASE_WIDTH,
     rollout_workers: int = PHASE_WIDTH,
-    strategy_version: str = "1",
+    strategy_version: str | None = None,
 ) -> ModeResult:
     """Run two frozen generations with one LLM trial per slot and k crossover trials."""
     k = int(k)
+    strategy_version = str(
+        config.POPULATION_STRATEGY_VERSION if strategy_version is None else strategy_version
+    )
     strategies = population.strategies_for(task_id, "pop", k, strategy_version)
     expected_base = [f"base{slot}" for slot in range(1, k + 1)]
     if [rollout.label for rollout in base] != expected_base:

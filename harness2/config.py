@@ -24,6 +24,7 @@ PKG = Path(__file__).resolve().parent
 ROOT = PKG.parent if (PKG.parent / "pyproject.toml").is_file() else Path.cwd()
 THIRD_PARTY = ROOT / "third_party"
 METHOD_VERSION = 2
+POPULATION_STRATEGY_VERSION = "1"
 
 DEPENDENCIES = ROOT / "dependencies"
 

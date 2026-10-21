@@ -66,7 +66,7 @@ class Summary:
 
 
 def _kind(r: Scored) -> str:
-    """Classify the selected output; each sequential checkpoint is a composed final."""
+    """Classify selected outputs against each mode's final pool."""
     lbl = str(getattr(r, "label", "") or "")
     if lbl.startswith("base"):
         return "base"
@@ -74,6 +74,8 @@ def _kind(r: Scored) -> str:
         return "final" if lbl.startswith("agg") else "candidate"
     if r.mode == "seq":
         return "final" if lbl in {f"c{index}" for index in range(1, r.k + 1)} else "candidate"
+    if r.mode == "pop":
+        return "final"
     return "candidate"
 
 
@@ -120,7 +122,7 @@ def render(summaries: Sequence[Summary], *, title: str = "", bench: str = "") ->
         lines.append(s.line(bench))
 
     at1 = {s.mode: s for s in summaries if s.k == 1 and s.score is not None}
-    if len(at1) == 2:
+    if "agg" in at1 and "seq" in at1:
         gap = abs(at1["agg"].score - at1["seq"].score)
         lines += [
             "",
@@ -131,14 +133,18 @@ def render(summaries: Sequence[Summary], *, title: str = "", bench: str = "") ->
         ]
 
     for s in summaries:
-        if s.n and s.chose_final <= 0.25 * s.n:
+        if s.mode != "pop" and s.n and s.chose_final <= 0.25 * s.n:
             lines += [
                 "",
                 f"  WARNING  {s.name}: the mode's own final was chosen on only "
                 f"{s.chose_final}/{s.n} tasks. These records include outputs outside "
                 f"the published pool of {s.k} composed finals.",
             ]
-    warn = [s for s in summaries if s.n and s.kept_base >= 0.8 * s.n]
+    warn = [
+        s
+        for s in summaries
+        if s.mode != "pop" and s.n and s.kept_base >= 0.8 * s.n
+    ]
     for s in warn:
         lines += [
             "",

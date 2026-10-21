@@ -100,3 +100,31 @@ Source PRD: tasks/prd-istratde-population.md
   - `selection_pool` now accepts optional `finals`; population requires the actual k survivor labels and permits `baseN`, while agg/seq retain their derived final labels.
   - A population base survivor's harness is under the pop namespace, while its adopted run directory can reference the shared base execution under the agg namespace. Resume validates both paths and their contents.
 ---
+
+## 2026-10-21 12:42:00 CST - US-005
+- Implemented public population/pop parsing and help, early k>=2 validation, population-only strategy-version identity, configured strategy propagation, honest pop final/base reporting, safe k=1 noise-floor handling, and comparison-cost reporting. Existing agg/seq defaults, namespaces, identity records, and Demo both behavior remain unchanged.
+- Files changed:
+  - `harness2/cli/_common.py`
+  - `harness2/cli/demo.py`
+  - `harness2/cli/report.py`
+  - `harness2/cli/run_sweep.py`
+  - `harness2/config.py`
+  - `harness2/core/recursion.py`
+  - `harness2/core/report.py`
+  - `harness2/core/schedule.py`
+  - `tests/test_workflow.py`
+  - `tasks/prd-istratde-population.md`
+  - `prd.json`
+  - `progress.txt`
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -k population -v` — 12 population-focused tests passed.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -v` — 23 tests passed, including CLI dry-run/aliases, pre-call k rejection, identity compatibility, judge/report parsing, base survivors, comparison costs, and existing agg/seq regressions.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -c "from pathlib import Path; import harness2.config, harness2.cli._common, harness2.cli.run_sweep, harness2.cli.demo, harness2.cli.report, harness2.core.recursion, harness2.core.schedule, harness2.core.report; [compile(Path(name).read_text(), name, 'exec') for name in ('harness2/config.py', 'harness2/cli/_common.py', 'harness2/cli/run_sweep.py', 'harness2/cli/demo.py', 'harness2/cli/report.py', 'harness2/core/recursion.py', 'harness2/core/schedule.py', 'harness2/core/report.py', 'tests/test_workflow.py')]"` — import and compile validation passed.
+  - `scripts/ralph/ralph.sh --agent kimi --dry-run` — dry run OK.
+  - `git diff --check` — passed.
+- **Learnings for future iterations:**
+  - `parse_modes` now returns canonical tokens in `SUPPORTED_MODES` order; `MODES` still defines the agg/seq defaults, and Demo `both` still means exactly agg+seq.
+  - `POPULATION_STRATEGY_VERSION` is read when population recursion starts and is added to `config.json` only when pop is selected. Existing agg/seq identity files therefore remain compatible.
+  - Population base survivors are reported as base without out-of-pool warnings; non-base survivors are finals. Batch comparison spend is included in report totals.
+  - US-006 still owns deterministic Demo proposal/comparison behavior, its real-Python repeat validation, and user documentation.
+---

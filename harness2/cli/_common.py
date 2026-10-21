@@ -33,8 +33,8 @@ SUBSTRATES = ("oc", "cx")
 
 MODES_DEFAULT = "parallel"
 MODES_HELP = (
-    "parallel | sequential (agg / seq accepted: the on-disk tokens); "
-    "comma list, e.g. 'parallel' or 'parallel,sequential'"
+    "parallel | sequential | population (agg / seq / pop accepted: the on-disk tokens); "
+    "comma list, e.g. 'parallel' or 'parallel,population'"
 )
 
 
@@ -89,8 +89,7 @@ def library_root_for(adapter: BenchmarkAdapter, k: int, *, seed: int | None, tag
 
 
 def summary_namespace(adapter: BenchmarkAdapter, k: int, *, seed: int | None, tag: str = "") -> str:
-    """The namespace whose task dirs hold summary.json for BOTH modes: run_task keeps the
-    summary in the parallel mode's namespace (on-disk token "agg") whichever modes ran."""
+    """The shared summary namespace; run_task keeps summaries under the agg namespace."""
     return SCHED.ns(adapter.spec.name, adapter.substrate.name, "agg", k, seed=seed, tag=tag)
 
 
@@ -115,7 +114,10 @@ def add_modes_arg(p: argparse._ActionsContainer) -> None:
 def add_run_identity_args(p: argparse._ActionsContainer) -> None:
     """The run-identity knobs that enter the namespace."""
     p.add_argument(
-        "--k", type=int, default=1, help="scale: R=4k rollouts, P=3k improver sessions per task"
+        "--k",
+        type=int,
+        default=1,
+        help="scale: R=4k rollouts; P=3k improver sessions, or P=2k+2 for population",
     )
     p.add_argument(
         "--seed", type=int, default=None, help="stream-order seed; omit for sorted task order"
@@ -124,11 +126,12 @@ def add_run_identity_args(p: argparse._ActionsContainer) -> None:
 
 
 def parse_modes(raw: str) -> tuple[str, ...]:
-    """'parallel,sequential' (or the on-disk tokens 'agg,seq') -> tokens in MODES order."""
+    """Parse public names or on-disk tokens into canonical supported-mode order."""
     names = [s.strip() for s in raw.split(",") if s.strip()]
     if not names:
         raise ValueError(
-            f"--modes takes a comma list of parallel | sequential (agg | seq), got {raw!r}"
+            f"--modes takes a comma list of parallel | sequential | population "
+            f"(agg | seq | pop), got {raw!r}"
         )
     tokens = set()
     for name in names:
@@ -136,7 +139,7 @@ def parse_modes(raw: str) -> tuple[str, ...]:
             tokens.add(SCHED.mode_token(name))
         except ValueError as exc:
             raise ValueError(f"--modes: {exc} (got {raw!r})") from None
-    return tuple(t for t in SCHED.MODES if t in tokens)
+    return tuple(t for t in SCHED.SUPPORTED_MODES if t in tokens)
 
 
 def mode_label(token: str) -> str:

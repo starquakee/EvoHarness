@@ -120,12 +120,12 @@ The first version must preserve the existing modes and Harness²'s ground-truth-
 **Description:** As an experimenter, I want consistent CLI and reporting support so that population runs cannot be confused with other experiments.
 
 **Acceptance Criteria:**
-- [ ] Update mode parsing/help in `harness2/cli/_common.py`, `harness2/cli/run_sweep.py`, `harness2/cli/demo.py`, and `harness2/cli/judge.py` as applicable.
-- [ ] `population` and `pop` resolve to the same token; defaults and Demo `both` do not gain a new mode.
-- [ ] Population with `k<2` fails before model calls with an actionable error.
-- [ ] Add an independent population strategy version to `harness2/config.py` and include it in identity only for population runs.
-- [ ] Update `harness2/core/report.py` so pop finals/base survivors are classified honestly and k=1 agg/seq noise-floor logic never assumes every two-mode report contains both agg and seq.
-- [ ] CLI dry-run, namespace, judge/report parsing, and old-default regression tests pass.
+- [x] Update mode parsing/help in `harness2/cli/_common.py`, `harness2/cli/run_sweep.py`, `harness2/cli/demo.py`, and `harness2/cli/judge.py` as applicable.
+- [x] `population` and `pop` resolve to the same token; defaults and Demo `both` do not gain a new mode.
+- [x] Population with `k<2` fails before model calls with an actionable error.
+- [x] Add an independent population strategy version to `harness2/config.py` and include it in identity only for population runs.
+- [x] Update `harness2/core/report.py` so pop finals/base survivors are classified honestly and k=1 agg/seq noise-floor logic never assumes every two-mode report contains both agg and seq.
+- [x] CLI dry-run, namespace, judge/report parsing, and old-default regression tests pass.
 
 ### US-006: Deterministic end-to-end Demo and documentation
 

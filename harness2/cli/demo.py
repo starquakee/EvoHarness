@@ -28,14 +28,20 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("runs/demo"))
     parser.add_argument("--k", type=int, default=2)
-    parser.add_argument("--mode", choices=("parallel", "sequential", "both"), default="both")
+    parser.add_argument(
+        "--mode",
+        choices=("parallel", "sequential", "population", "pop", "both"),
+        default="both",
+    )
     args = parser.parse_args(argv)
     if args.k < 1:
         parser.error("--k must be positive")
+    modes = ("agg", "seq") if args.mode == "both" else (mode_token(args.mode),)
+    if "pop" in modes and args.k < 2:
+        parser.error("--k must be at least 2 for population mode")
     root = args.output.expanduser().resolve()
     adapter = DemoAdapter(root)
     proposer = DemoProposer(adapter.spec.channels["proposer"])
-    modes = ("agg", "seq") if args.mode == "both" else (mode_token(args.mode),)
     result = run_domain(
         "accounting",
         adapter.tasks(),

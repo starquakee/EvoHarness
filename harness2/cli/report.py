@@ -50,6 +50,7 @@ def _spend_and_fallbacks(ns_dir: Path, modes: tuple[str, ...], k: int) -> tuple[
             rec = (records or {}).get(mode) or {}
             fell_back[key] = fell_back.get(key, 0) + len(rec.get("fell_back") or [])
             spend = sum(float(s.get("usd") or 0.0) for s in rec.get("stages") or [])
+            spend += sum(float(c.get("usd") or 0.0) for c in rec.get("comparisons") or [])
             sel = (summary.get("selections") or {}).get(mode) or {}
             usd[key] = usd.get(key, 0.0) + spend + float(sel.get("usd") or 0.0)
     return fell_back, usd
@@ -104,8 +105,8 @@ def main(argv: list[str] | None = None) -> int:
     spend = sum(s.usd for s in summaries)
     if spend:
         print(
-            f"\n  improver (editors, composer, selection, reflection) spend across reported modes: "
-            f"${spend:.2f}"
+            f"\n  improver (editors, composer, comparison, selection, reflection) spend across "
+            f"reported modes: ${spend:.2f}"
         )
     return 0
 

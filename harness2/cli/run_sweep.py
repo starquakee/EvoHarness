@@ -15,9 +15,9 @@
 """Run one adaptation sweep: every task of a split, domains parallel, tasks in stream order.
 
 Thin argparse over core.schedule.run_sweep. Costs money when run for real: each task is
-R=4k task-executor rollouts and P=3k improver sessions. `--dry-run` prints the exact
-(domain, task) stream and namespaces without creating a Proposer, touching a substrate or
-validating a model setting.
+R=4k task-executor rollouts and P=3k improver sessions (P=2k+2 for population). `--dry-run`
+prints the exact (domain, task) stream and namespaces without creating a Proposer, touching
+a substrate or validating a model setting.
 
 A real run checks the judge before the first rollout, because the namespace records the
 judge model and `harness2-judge` refuses to grade it under a different one: discovering a
@@ -132,6 +132,8 @@ def _main(args: argparse.Namespace) -> int:
     if args.k < 1 or args.workers < 1:
         raise ValueError("--k and --workers must be positive")
     modes = C.parse_modes(args.modes)
+    if "pop" in modes and args.k < 2:
+        raise ValueError("--k must be at least 2 when population mode is selected")
 
     if args.dry_run:
         return _print_stream(
@@ -223,6 +225,8 @@ def _check_identity(adapter, args, namespace_dir: Path) -> None:
         "domains": sorted(_csv(args.only_domains)),
         "seed": args.seed,
     }
+    if "pop" in C.parse_modes(args.modes):
+        identity["population_strategy_version"] = config.POPULATION_STRATEGY_VERSION
     namespace_dir.mkdir(parents=True, exist_ok=True)
     path = namespace_dir / "config.json"
     if path.is_file():
