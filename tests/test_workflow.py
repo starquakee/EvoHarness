@@ -21,7 +21,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from harness2 import config
-from harness2.core import context, judge, recursion, schedule, tree
+from harness2.core import context, judge, population, recursion, schedule, tree
 from harness2.core.library import Library
 from harness2.core.proposer import Proposer, ProposerError, Reply
 from harness2.core.spec import resolve_channel_model
@@ -223,6 +223,123 @@ class WorkflowTests(unittest.TestCase):
         )
         self.adapter.score.assert_not_called()
         self.assertEqual((rows[0].graded, rows[0].n_passed), (False, None))
+
+    def test_population_strategies_and_donor_selection_are_deterministic(self):
+        for k in (2, 5):
+            strategies = population.strategies_for("ledger-1", "pop", k, "strategy-v1")
+            self.assertEqual(strategies, population.strategies_for("ledger-1", "pop", k, "strategy-v1"))
+            self.assertEqual([strategy.slot for strategy in strategies], list(range(1, k + 1)))
+            for strategy in strategies:
+                for _generation in (1, 2):
+                    self.assertEqual(
+                        population.strategy_for("ledger-1", "pop", k, "strategy-v1", strategy.slot),
+                        strategy,
+                    )
+                self.assertIn(strategy.parent_selection, population.PARENT_SELECTIONS)
+                self.assertIn(strategy.edit_scope, population.EDIT_SCOPES)
+                self.assertIn(strategy.crossover, population.CROSSOVER_KINDS)
+                self.assertIn(strategy.cr, population.CR_VALUES)
+                self.assertIn(strategy.donor_count, (1,) if k == 2 else (1, 2))
+
+        base = population.strategy_for("ledger-1", "pop", 5, "strategy-v1", 2)
+        snapshot = {slot: f"base{slot}" for slot in range(1, 6)}
+        fitness = {1: 0, 2: 3, 3: 1, 4: 7, 5: 7}
+
+        def profile(**changes):
+            return population.PopulationStrategy(**(base.to_dict() | changes))
+
+        current = profile(parent_selection="current", donor_count=2)
+        selected = population.choose_parent_and_donors(
+            current, snapshot, fitness, generation=1
+        )
+        self.assertEqual(selected, population.choose_parent_and_donors(
+            current, snapshot, fitness, generation=1
+        ))
+        parent, donors = selected
+        self.assertEqual(parent, snapshot[current.slot])
+        self.assertEqual(len(donors), 2)
+        self.assertEqual(len(set(donors)), 2)
+        self.assertNotIn(parent, donors)
+
+        best = profile(parent_selection="best")
+        parent, _ = population.choose_parent_and_donors(best, snapshot, fitness, generation=2)
+        self.assertEqual(parent, "base4")
+        for selection in ("random", "pbest"):
+            strategy = profile(parent_selection=selection)
+            first = population.choose_parent_and_donors(strategy, snapshot, fitness, generation=2)
+            second = population.choose_parent_and_donors(strategy, snapshot, fitness, generation=2)
+            self.assertEqual(first, second)
+
+    def test_population_crossover_copies_components_without_mutating_inputs(self):
+        surface = self.adapter.substrate.surface()
+        parent = {
+            "systemprompt.md": "parent prompt",
+            "scripts/summarize.py": "parent summary",
+            "scripts/other.py": "parent other",
+        }
+        donor = {
+            "systemprompt.md": "donor prompt",
+            "scripts/summarize.py": "donor summary",
+            "scripts/other.py": "donor other",
+        }
+        parent_before, donor_before = dict(parent), dict(donor)
+        base = population.strategy_for("ledger-1", "pop", 2, "strategy-v1", 1)
+
+        for kind in population.CROSSOVER_KINDS:
+            strategy = population.PopulationStrategy(
+                **(base.to_dict() | {"crossover": kind, "edit_scope": "all"})
+            )
+            crossed = population.component_crossover(
+                surface, parent, [donor], strategy, generation=1
+            )
+            self.assertIsNot(crossed, parent)
+            self.assertNotEqual(crossed, parent)
+            self.assertEqual(
+                crossed,
+                population.component_crossover(surface, parent, [donor], strategy, generation=1),
+            )
+            self.assertEqual(parent, parent_before)
+            self.assertEqual(donor, donor_before)
+
+        scoped = population.PopulationStrategy(
+            **(base.to_dict() | {"edit_scope": "scripts", "crossover": "binomial"})
+        )
+        crossed = population.component_crossover(surface, parent, [donor], scoped, generation=1)
+        self.assertEqual(crossed["systemprompt.md"], parent["systemprompt.md"])
+
+    def test_population_schedule_lineage_and_budget_identities(self):
+        for k in (2, 3, 6):
+            schedule = population.deterministic_trial_schedule(
+                "ledger-1", "pop", k, "strategy-v1"
+            )
+            self.assertEqual(
+                schedule,
+                population.deterministic_trial_schedule("ledger-1", "pop", k, "strategy-v1"),
+            )
+            self.assertEqual(sorted(schedule), [1, 2])
+            self.assertEqual(
+                sorted(slot for slots in schedule.values() for slot in slots),
+                list(range(1, k + 1)),
+            )
+            self.assertEqual(population.expected_trial_rollouts(k), 3 * k)
+            self.assertEqual(population.expected_rollouts(k), 4 * k)
+            self.assertEqual(population.expected_sessions(k), 2 * k + 2)
+            if k == 2:
+                self.assertEqual(population.expected_sessions(k), 3 * k)
+            else:
+                self.assertLess(population.expected_sessions(k), 3 * k)
+            initial = population.initial_lineage(k)
+            self.assertEqual(
+                [record.survivor for record in initial],
+                [f"base{i}" for i in range(1, k + 1)],
+            )
+            self.assertEqual([record.fitness for record in initial], [0] * k)
+            json.dumps([record.to_dict() for record in initial])
+
+        self.assertEqual(population.survivor_fitness(4, False), 4)
+        self.assertEqual(population.survivor_fitness(4, True), 5)
+        with self.assertRaisesRegex(ValueError, "k >= 2"):
+            population.expected_rollouts(1)
 
 
 if __name__ == "__main__":

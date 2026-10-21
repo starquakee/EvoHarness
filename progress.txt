@@ -17,3 +17,21 @@ Source PRD: tasks/prd-istratde-population.md
 - Validation: `PYTHONDONTWRITEBYTECODE=1 uv run --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -v` — 5 tests passed.
 - Decision: implement US-001 through US-006 locally. US-007 remains blocked until Linux, LAB dependencies, model credentials/quota, network restrictions, and an approved sample/cost cap are available.
 ---
+
+## 2026-10-21 11:44:32 CST - US-001
+- Implemented deterministic fixed population strategies, frozen-snapshot parent/donor selection, non-mutating binomial and exponential file-component crossover, initial lineage and surrogate-fitness records, deterministic extra-trial scheduling, and population budget helpers.
+- Files changed:
+  - `harness2/core/population.py`
+  - `tests/test_workflow.py`
+  - `tasks/prd-istratde-population.md`
+  - `prd.json`
+  - `progress.txt`
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -v` — 8 tests passed.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -c "from pathlib import Path; import harness2.core.population; compile(Path('tests/test_workflow.py').read_text(), 'tests/test_workflow.py', 'exec')"` — import and compile validation passed.
+  - `git diff --check` — passed.
+- **Learnings for future iterations:**
+  - Population helpers reject `k<2`. At `k=2`, strategies use one donor so parent/donor selection can keep donors distinct; two-donor strategies start at `k>=3`.
+  - `deterministic_trial_schedule` returns generation-keyed disjoint slots; `expected_trial_rollouts` includes the `2k` LLM trials plus `k` deterministic trials.
+  - US-001 adds primitives only. Ledger accounting and recursion dispatch remain for US-003; do not expect `run_mode("pop")` to work yet.
+---

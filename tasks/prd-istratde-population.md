@@ -72,12 +72,12 @@ The first version must preserve the existing modes and Harness²'s ground-truth-
 **Description:** As a researcher, I want deterministic population strategies and explicit budget helpers so that experiments are reproducible and auditable.
 
 **Acceptance Criteria:**
-- [ ] Add `harness2/core/population.py` with fixed strategy generation, donor selection, component crossover, lineage records, and pop budget helpers.
-- [ ] Identical task/mode/k/version/slot inputs reproduce identical strategies across calls and generations.
-- [ ] Crossover returns a new Tree and never mutates an input Tree.
-- [ ] The deterministic extra-trial schedule assigns exactly one deterministic trial per slot across two generations and `3k` total trial rollouts.
-- [ ] Tests prove `R=4k`, `P=2k+2`, `P=3k` at k=2, and `P<3k` at k>2.
-- [ ] Focused unittest command passes.
+- [x] Add `harness2/core/population.py` with fixed strategy generation, donor selection, component crossover, lineage records, and pop budget helpers.
+- [x] Identical task/mode/k/version/slot inputs reproduce identical strategies across calls and generations.
+- [x] Crossover returns a new Tree and never mutates an input Tree.
+- [x] The deterministic extra-trial schedule assigns exactly one deterministic trial per slot across two generations and `3k` total trial rollouts.
+- [x] Tests prove `R=4k`, `P=2k+2`, `P=3k` at k=2, and `P<3k` at k>2.
+- [x] Focused unittest command passes.
 
 ### US-002: Answer-free batch survivor comparison
 
