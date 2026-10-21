@@ -132,11 +132,11 @@ The first version must preserve the existing modes and Harness²'s ground-truth-
 **Description:** As a maintainer, I want a credential-free end-to-end check and accurate documentation so that the new mode can be verified without external services.
 
 **Acceptance Criteria:**
-- [ ] Extend `harness2/demo.py` so scripted strategies produce distinguishable edits and batch comparisons select valid outputs using source evidence without a benchmark judge.
-- [ ] `python -m harness2.cli.demo --k 2 --mode population` completes two real-Python tasks, writes all population audit records, and resumes without new calls on repeat.
-- [ ] Update `README.md` and `docs/EXPERIMENTS.md` with mode behavior, budgets, base-survivor semantics, resume boundary, citations, and judge isolation.
-- [ ] Full unittest suite passes, and existing agg/seq Demo behavior still passes.
-- [ ] Documentation does not claim real LAB improvement.
+- [x] Extend `harness2/demo.py` so scripted strategies produce distinguishable edits and batch comparisons select valid outputs using source evidence without a benchmark judge.
+- [x] `python -m harness2.cli.demo --k 2 --mode population` completes two real-Python tasks, writes all population audit records, and resumes without new calls on repeat.
+- [x] Update `README.md` and `docs/EXPERIMENTS.md` with mode behavior, budgets, base-survivor semantics, resume boundary, citations, and judge isolation.
+- [x] Full unittest suite passes, and existing agg/seq Demo behavior still passes.
+- [x] Documentation does not claim real LAB improvement.
 
 ### US-007: Same-budget LAB comparison and independent evaluation
 

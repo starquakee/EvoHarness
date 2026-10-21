@@ -42,10 +42,12 @@ Across three professional benchmarks and four model–harness configurations, a
 single Harness² step improves GLM-5 and Gemini 3.5 Flash over their base
 harnesses, with gains of up to 11.5 points on WorkBuddy-Bench, 4.5 points on
 JobBench, and 11.8 percentage points on LAB's partial pass rate. Increasing the
-task-level recursion budget brings further gains.
+task-level recursion budget brings further gains. These published results do not
+include population mode.
 
-The release supports **parallel and sequential recursion**, **OpenCode and
-Codex executors**, and **JobBench, LAB, and WorkBuddy-Bench**.
+The release supports **parallel, sequential, and iStratDE-inspired discrete
+population recursion**, **OpenCode and Codex executors**, and **JobBench, LAB,
+and WorkBuddy-Bench**.
 
 ## Video overview
 
@@ -90,8 +92,13 @@ uv pip install -e '.[render]'
 harness2-demo --output runs/demo --k 2
 ```
 
-The local demo runs both recursion modes with deterministic editors and real
-Python executions. It requires no model credentials.
+The default local demo runs parallel and sequential recursion with deterministic
+editors and real Python executions. It requires no model credentials; Demo `both`
+continues to mean those two modes only. To exercise population mode:
+
+```bash
+harness2-demo --output runs/demo-population --k 2 --mode population
+```
 
 For model-backed benchmarks, install **Node.js 20+, the Google Cloud CLI**, and
 the [benchmark dependencies](docs/SETUP.md#requirements). LAB needs Pandoc and
@@ -120,9 +127,10 @@ harness2-judge --bench lab --k 1 --mode parallel
 harness2-report --bench lab --k 1 --mode parallel
 ```
 
-Sequential recursion runs the same commands with `--mode sequential`. `--k` is
-the task-level recursion budget; see [Experiments](#experiments). Judging and
-reporting must use the same benchmark, executor, subset, `--k`, `--mode`, and
+Sequential recursion runs the same commands with `--mode sequential`. Population
+recursion uses `--mode population` (or `pop`) and requires `--k 2` or greater.
+`--k` is the task-level recursion budget; see [Experiments](#experiments). Judging
+and reporting must use the same benchmark, executor, subset, `--k`, `--mode`, and
 seed as the refinement run. Add `--dry-run` to `harness2` to preview task
 selection without model calls.
 
@@ -139,10 +147,11 @@ grading.
 
 ## Experiments
 
-Scale task-level recursion in two ways: **parallel recursion** explores multiple
+Scale task-level recursion in three ways: **parallel recursion** explores multiple
 candidate harnesses and composes refinements from their execution evidence;
 **sequential recursion** carries the refined harness and accumulated evidence
-through successive Propose–Probe–Compose steps.
+through successive Propose–Probe–Compose steps; **population recursion** evolves
+fixed-strategy slots through structured edits and deterministic component crossover.
 
 <p align="center">
   <a href="assets/harness2_recursion_modes.png">
@@ -153,15 +162,32 @@ through successive Propose–Probe–Compose steps.
 
 | Option | Behavior |
 |---|---|
-| `--k 1` | One Propose–Probe–Compose step |
+| `--k 1` | One parallel or sequential Propose–Probe–Compose step |
 | `--k K --mode parallel` | Probe `K` general and `K` domain-specific candidates, then produce `K` compositions |
 | `--k K --mode sequential` | Refine the harness through `K` successive steps |
+| `--k K --mode population` | Evolve `N=K` fixed-strategy slots for two generations; requires `K>=2` |
 | `--substrate cx` | Use Codex instead of the default OpenCode executor |
 
+Population mode is inspired by the discrete strategy-diversity idea in
+[iStratDE](https://arxiv.org/abs/2602.01147); it is not the original continuous
+algorithm. Each slot keeps the same strategy across both generations. It receives
+one LLM proposal per generation and one deterministic component-crossover trial
+across the two generations. Including the shared base executions, the budget is
+`R=4K` rollouts. The `2K` proposal sessions plus one batch comparison per
+generation give `P=2K+2`; deterministic trials count as rollouts and comparisons
+as sessions. Final selection and reflection remain outside the Ledger.
+
+One anonymous comparator call per generation uses only task, source, and artifact
+evidence. It never uses benchmark answers, rubrics, grader verdicts, judge scores,
+or `adapter.score`; invalid or uncertain comparisons preserve the parent. Final
+selection receives the `K` slot survivors, which can legally include a `baseN`
+label. Reports identify these retained bases rather than treating them as errors.
+The deterministic Demo validates these mechanics, not real LAB improvement.
+
 After each task, harnessing-level recursion retains the adopted harness and
-evidence-supported lessons to guide future refinement. See the
-[experiment guide](docs/EXPERIMENTS.md) for task selection, concurrency,
-reproducibility, and baseline comparisons.
+evidence-supported lessons to guide future refinement. Libraries remain separate
+by mode. See the [experiment guide](docs/EXPERIMENTS.md) for task selection,
+concurrency, reproducibility, and baseline comparisons.
 
 ## Web access
 
@@ -176,9 +202,13 @@ Results are saved under `runs/`, organized by benchmark and subset where
 applicable. They include task summaries, deliverables, adopted harnesses,
 reflection notes, and evaluation results.
 
-Repeat the same command to resume. Use a new `HARNESS2_RUNS_DIR` when changing
-models or task selection. See [results and resume](docs/EXPERIMENTS.md#results-and-resume)
-for details; each command also supports `--help`.
+Repeat the same command to resume completed tasks without new executor or Proposer
+calls. Population resume is complete-task based: an incomplete task restarts its
+population procedure using deterministic strategies, labels, run ids, and the
+Proposer cache; mid-generation checkpoint recovery is not supported. Use a new
+`HARNESS2_RUNS_DIR` when changing models or task selection. See
+[results and resume](docs/EXPERIMENTS.md#results-and-resume) for details; each
+command also supports `--help`.
 
 ## Citation
 

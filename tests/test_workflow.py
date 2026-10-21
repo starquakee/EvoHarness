@@ -1080,6 +1080,93 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertEqual(report._kind(non_base), "final")
 
+    def test_population_demo_end_to_end_audit_and_no_call_resume(self):
+        output = self.root / "population-demo"
+        score = Mock()
+        with (
+            patch.object(DemoAdapter, "score", score, create=True),
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            status = demo_cli.main(
+                ["--output", str(output), "--k", "2", "--mode", "population"]
+            )
+        self.assertEqual(status, 0)
+        first = json.loads((output / "demo.json").read_text())
+        self.assertEqual(
+            (first["done"], first["failed"], first["execution_count"], first["editor_calls"]),
+            (2, 0, 16, 16),
+        )
+        self.assertEqual([row["status"] for row in first["tasks"]], ["ok", "ok"])
+
+        summaries = {}
+        for task_id in self.adapter.tasks():
+            summary_path = output / f"runs/demo-oc-agg2/{task_id}/summary.json"
+            summary = json.loads(summary_path.read_text())
+            summaries[task_id] = summary
+            pop = summary["modes"]["pop"]
+            self.assertTrue(pop["ok"])
+            self.assertEqual(len(pop["strategies"]), 2)
+            self.assertEqual(len(pop["lineage"]), 6)
+            self.assertEqual(len(pop["comparisons"]), 2)
+            self.assertEqual(len(pop["finals"]), 2)
+            self.assertEqual(
+                (pop["ledger"]["R"], pop["ledger"]["expected_R"]), (8, 8)
+            )
+            self.assertEqual(
+                (pop["ledger"]["P"], pop["ledger"]["expected_P"]), (6, 6)
+            )
+            self.assertEqual(pop["ledger"]["session_attempts"], 6)
+            self.assertEqual(pop["ledger"]["usd"], 0.0)
+            self.assertTrue(all(stage["attempts"] == 1 for stage in pop["stages"]))
+            self.assertTrue(all("usd" in stage for stage in pop["stages"]))
+
+            pop_work = output / f"runs/demo-oc-pop2/{task_id}"
+            for strategy in pop["strategies"]:
+                if strategy["edit_scope"] not in ("all", "scripts"):
+                    continue
+                slot = strategy["slot"]
+                scripts = [
+                    (pop_work / f"harnesses/g{generation}s{slot}/scripts/summarize.py")
+                    .read_text()
+                    for generation in (1, 2)
+                ]
+                self.assertNotEqual(scripts[0], scripts[1])
+                self.assertTrue(all("if amount > 0" not in script for script in scripts))
+            for generation, comparison in enumerate(pop["comparisons"], 1):
+                self.assertEqual(comparison["session"], f"compare.pop2.g{generation}")
+                self.assertEqual((comparison["usd"], comparison["attempts"]), (0.0, 1))
+                record_path = pop_work / f"comparisons/pop2/g{generation}/comparison.json"
+                record = json.loads(record_path.read_text())
+                self.assertEqual(record["session"], comparison["session"])
+                self.assertEqual(len(record["outcomes"]), 2)
+                self.assertTrue(all(outcome["reason"] for outcome in record["outcomes"]))
+
+            selection = summary["selections"]["pop"]
+            self.assertTrue(selection["ok"])
+            self.assertIn(selection["chosen_label"], pop["finals"])
+            self.assertEqual(selection["usd"], 0.0)
+
+        chosen = summaries["ledger-1"]["selections"]["pop"]
+        self.assertFalse(chosen["chosen_is_base"])
+        self.assertEqual(
+            (Path(chosen["chosen_run_dir"]) / "answer.txt").read_text(), "Total: 85.15\n"
+        )
+        retained = summaries["ledger-2"]["selections"]["pop"]
+        self.assertTrue(retained["chosen_is_base"])
+        self.assertTrue(retained["chosen_tree_is_base"])
+        self.assertIn("No candidate matched", retained["why"])
+        score.assert_not_called()
+
+        with patch("sys.stdout", new_callable=io.StringIO):
+            status = demo_cli.main(
+                ["--output", str(output), "--k", "2", "--mode", "population"]
+            )
+        self.assertEqual(status, 0)
+        resumed = json.loads((output / "demo.json").read_text())
+        self.assertEqual((resumed["execution_count"], resumed["editor_calls"]), (0, 0))
+        self.assertEqual([row["status"] for row in resumed["tasks"]], ["skipped", "skipped"])
+        score.assert_not_called()
+
     def test_report_noise_floor_requires_parallel_and_sequential(self):
         parallel = report.Summary(mode="agg", k=1, n=1, score=50, chose_final=1)
         sequential = report.Summary(mode="seq", k=1, n=1, score=55, chose_final=1)

@@ -5,13 +5,18 @@ guide covers recursion budgets, task selection, reproducibility, and evaluation.
 
 ## Recursion modes
 
-Both modes start with `k` reference executions of the same base harness.
+All modes start with `k` reference executions of the same base harness.
 
 - **Parallel recursion** proposes and probes `k` general (invariant) candidates
   and `k` domain-specific candidates. Each of `k` independent compositions uses
   the full candidate pool and execution evidence to produce a refined harness.
 - **Sequential recursion** runs `k` Propose–Probe–Compose steps, carrying the
   refined harness and accumulated execution evidence into the next step.
+- **Population recursion** keeps `N=k` individuals with deterministic fixed
+  strategies for `G=2` generations. Each generation freezes the parents, runs
+  one structured-edit proposal per slot, and then compares parent and trial
+  artifacts in one anonymous batch. Each slot also receives exactly one
+  deterministic component-crossover trial across the two generations.
 
 After adoption, reflection stores the adopted harness and evidence-supported
 lessons in a per-domain library. Tasks within a domain run in order and read
@@ -20,9 +25,10 @@ separated by benchmark, executor, mode, budget, and seed.
 
 | Option | Behavior |
 |---|---|
-| `--k 1` | One Propose–Probe–Compose step, followed by reflection after adoption |
+| `--k 1` | One parallel or sequential Propose–Probe–Compose step, followed by reflection |
 | `--k K --mode parallel` | Explore `K` candidates per scope and produce `K` compositions |
 | `--k K --mode sequential` | Refine the harness through `K` successive steps |
+| `--k K --mode population` | Evolve `K` fixed-strategy slots for two generations; requires `K>=2` |
 | `--workers N` | Run `N` domains concurrently; tasks within each domain stay ordered |
 | `--substrate cx` | Use Codex instead of the default OpenCode executor |
 | `--seed N` | Shuffle the task stream reproducibly; does not control model sampling |
@@ -40,6 +46,37 @@ harness2-report --bench lab --k 3 --mode sequential
 
 Use a separate output root when changing the budget or mode to keep experiments
 easy to distinguish.
+
+### Population budgets and survivor selection
+
+Population mode is an iStratDE-inspired discrete population algorithm, not the
+original continuous method. See the [iStratDE paper](https://arxiv.org/abs/2602.01147)
+and [reference repository](https://github.com/EMI-Group/istratde) for the source
+of the strategy-diversity idea. Harness² uses structured file edits and whole-file
+component crossover; it does not convert text into numeric vectors.
+
+The `k` base executions plus `2k` LLM trials and `k` deterministic trials give
+`R=4k` rollouts. The Ledger records `2k` proposal sessions and two batch
+comparison sessions, so `P=2k+2`. Thus `P=3k` at `k=2` and `P<3k` at `k>2`.
+Deterministic crossover trials still count as rollouts. Final selection and
+reflection stay outside the Ledger, and reports retain their actual costs rather
+than treating equal `k` as proof of equal resource use.
+
+The comparator sees only anonymized task, source, and artifact evidence. Population
+optimization and survivor selection never call `adapter.score`, import the judge,
+read rubrics, or use grader verdicts. Final selection, reflection, and Library
+updates are answer-free as well. A malformed comparison, invalid trial, missing
+winner, or uncertain choice preserves that slot's parent. Surrogate fitness
+records accepted lineage only; it is not a benchmark score.
+
+Final selection receives exactly the `k` slot survivors. Greedy comparison can
+retain an initial `baseN` individual, and duplicate survivor labels can occur when
+slots converge. Such a base is a legal result and is reported as base, not as an
+out-of-pool final. Each mode has its own experience Library.
+
+The credential-free deterministic Demo checks this lifecycle with real Python
+executions. It does not establish a real LAB improvement; that requires a separate
+same-budget comparison and independent judged evaluation.
 
 ## Task selection and cost
 
@@ -114,9 +151,15 @@ The default output roots are `runs/lab/`, `runs/jb/`, and
 `runs/wb/<subset>/`. They contain task summaries, execution artifacts, adopted
 harnesses, reflection notes, and graded results.
 
-Repeat the same command to resume. Failed evaluations remain unscored rather
-than being counted as zero. Use a new `HARNESS2_RUNS_DIR` when changing models or
-task selection.
+Repeat the same command to resume. Resume is complete-task based: a completed
+population task adds no executor or Proposer calls, while an incomplete task
+restarts its population procedure. Deterministic strategies, labels, run ids, and
+the Proposer cache make that restart reproducible; mid-generation checkpoint
+recovery is not supported. Changed adopted harnesses or missing adopted artifacts
+also trigger a rerun.
+
+Failed evaluations remain unscored rather than being counted as zero. Use a new
+`HARNESS2_RUNS_DIR` when changing models or task selection.
 
 Refinement, judging, and reporting use `harness2`, `harness2-judge`, and
 `harness2-report`; each supports `--help`.

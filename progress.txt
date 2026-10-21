@@ -128,3 +128,28 @@ Source PRD: tasks/prd-istratde-population.md
   - Population base survivors are reported as base without out-of-pool warnings; non-base survivors are finals. Batch comparison spend is included in report totals.
   - US-006 still owns deterministic Demo proposal/comparison behavior, its real-Python repeat validation, and user documentation.
 ---
+
+## 2026-10-21 12:54:11 CST - US-006
+- Implemented deterministic population Demo proposals with distinct signed-sum script variants, source-evidence batch comparisons, conservative parent retention, and an explicit delivered-artifact final-selection fallback when no candidate matches the source. Added end-to-end audit/resume coverage and documented population behavior, budgets, base survivors, judge isolation, citations, and complete-task resume without claiming LAB improvement.
+- Files changed:
+  - `harness2/demo.py`
+  - `tests/test_workflow.py`
+  - `README.md`
+  - `docs/EXPERIMENTS.md`
+  - `tasks/prd-istratde-population.md`
+  - `prd.json`
+  - `progress.txt`
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -k population_demo_end_to_end -v` — 1 end-to-end Demo test passed.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -v` — 24 tests passed.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -c "from pathlib import Path; import harness2.demo, harness2.cli.demo; [compile(Path(name).read_text(), name, 'exec') for name in ('harness2/demo.py', 'harness2/cli/demo.py', 'tests/test_workflow.py')]"` — import and compile validation passed.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m harness2.cli.demo --output "$output" --k 2 --mode population` — first run completed 2 tasks with 0 failures, 16 executions, and 16 editor calls; repeating against the same persistent temporary output root skipped both tasks with 0 executions and 0 editor calls.
+  - Population summary inspection after repeat — each task retained 2 fixed strategies, 6 lineage records, comparison sessions `compare.pop2.g1` and `compare.pop2.g2`, `R=8`, `P=6`, and explicit zero cost records; ledger-1 selected non-base `g1s1`, while ledger-2 honestly selected legal base survivor `base1`.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m harness2.cli.demo --output "$output" --k 2 --mode both` — existing agg/seq Demo produced the expected signed totals for both tasks and repeated with 0 executions and 0 editor calls; summaries still contained only agg and seq.
+  - `scripts/ralph/ralph.sh --agent kimi --dry-run` — dry run OK.
+  - `git diff --check` — passed.
+- **Learnings for future iterations:**
+  - The pre-change population Demo raised `StopIteration` when no final candidate matched the source total. The deterministic comparator now returns `UNCERTAIN` in that case; final selection records the no-match reason and chooses a delivered artifact, so an all-base survivor pool completes honestly.
+  - Script-capable Demo strategies alternate generator-sum and explicit-loop implementations by generation and slot. Other fixed scopes retain the parent because the local executor runs only `scripts/summarize.py`; this exercises legal base survivors without violating edit scope.
+  - US-007 remains blocked by its external Linux/LAB/credentials/network/cost-cap preconditions. Local Demo and unit-test success is not LAB improvement evidence.
+---
