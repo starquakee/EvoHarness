@@ -84,12 +84,12 @@ The first version must preserve the existing modes and Harness²'s ground-truth-
 **Description:** As a researcher, I want one anonymous comparator call per generation so that survivor selection has a quality signal without using a benchmark judge.
 
 **Acceptance Criteria:**
-- [ ] Add batch comparison support in `harness2/core/selection.py` and `harness2/core/prompts.py`, with unique generation roots and session labels.
-- [ ] The comparator receives anonymized task/source/artifact evidence and returns one explicit winner for every requested slot.
-- [ ] Invalid trials, missing winners, parser failures, and comparator exceptions preserve the relevant parent and are recorded.
-- [ ] Multi-generation calls do not delete each other's context or collide in the Proposer cache.
-- [ ] Tests mock `adapter.score` and prove it is never called; comparison costs and attempts are returned for Ledger recording.
-- [ ] Focused unittest command passes.
+- [x] Add batch comparison support in `harness2/core/selection.py` and `harness2/core/prompts.py`, with unique generation roots and session labels.
+- [x] The comparator receives anonymized task/source/artifact evidence and returns one explicit winner for every requested slot.
+- [x] Invalid trials, missing winners, parser failures, and comparator exceptions preserve the relevant parent and are recorded.
+- [x] Multi-generation calls do not delete each other's context or collide in the Proposer cache.
+- [x] Tests mock `adapter.score` and prove it is never called; comparison costs and attempts are returned for Ledger recording.
+- [x] Focused unittest command passes.
 
 ### US-003: Two-generation population recursion
 

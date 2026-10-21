@@ -15,17 +15,75 @@
 """Focused regressions for the paper's execution, evidence, and adoption contracts."""
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from harness2 import config
-from harness2.core import context, judge, population, recursion, schedule, tree
+from harness2.core import context, judge, population, recursion, schedule, selection, tree
 from harness2.core.library import Library
 from harness2.core.proposer import Proposer, ProposerError, Reply
-from harness2.core.spec import resolve_channel_model
+from harness2.core.spec import RunView, resolve_channel_model
 from harness2.demo import BASE_SCRIPT, DemoAdapter, DemoProposer
+
+
+def _comparison_rollout(root, label, total, *, ok=True, delivered=True):
+    run_dir = root / "comparison-rollouts" / label
+    run_dir.mkdir(parents=True, exist_ok=True)
+    if delivered:
+        (run_dir / "answer.txt").write_text(f"Total: {total}\n", encoding="utf-8")
+    else:
+        (run_dir / "answer.txt").unlink(missing_ok=True)
+    (run_dir / "trajectory.md").write_text(
+        f"[OBSERVATION]\nTotal: {total}\n" if ok else "[ERROR] execution failed\n",
+        encoding="utf-8",
+    )
+    return RunView(
+        label=label,
+        run_id=f"run-{label}",
+        run_dir=run_dir,
+        ok=ok,
+        delivered=delivered,
+        error="" if ok else "execution failed",
+    )
+
+
+class _BatchProposer(DemoProposer):
+    def __init__(self, spec):
+        super().__init__(spec)
+        self.batch_calls = []
+        self.responder = None
+
+    def source_winners(self, mission, context_dir):
+        groups = re.findall(r"^slot (\d+): ([A-Z, ]+)$", mission, re.M)
+        winners = []
+        for slot, candidate_ids in groups:
+            winner = next(
+                candidate_id
+                for candidate_id in candidate_ids.split(", ")
+                if "Total: 85.15"
+                in (context_dir / "candidates" / f"{candidate_id}.md").read_text()
+            )
+            winners.append((int(slot), winner))
+        return winners
+
+    def call(self, mission, context_dir, label, **kwargs):
+        if not label.startswith("compare."):
+            return super().call(mission, context_dir, label, **kwargs)
+        context_dir = Path(context_dir)
+        self.batch_calls.append((label, mission, context_dir))
+        if self.responder is not None:
+            text = self.responder(mission, context_dir)
+        else:
+            text = "\n".join(
+                f'<winner slot="{slot}" choice="{choice}">The total matches the source.</winner>'
+                for slot, choice in self.source_winners(mission, context_dir)
+            )
+        reply = Reply(label, text, True, cost_usd=1.25, attempts=2)
+        self._calls.append(reply)
+        return reply
 
 
 class WorkflowTests(unittest.TestCase):
@@ -340,6 +398,185 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(population.survivor_fitness(4, True), 5)
         with self.assertRaisesRegex(ValueError, "k >= 2"):
             population.expected_rollouts(1)
+
+
+    def _batch_inputs(self):
+        rollouts = {
+            label: _comparison_rollout(self.root, label, total)
+            for label, total in (
+                ("base1", "105.25"),
+                ("trial1", "85.15"),
+                ("trial1b", "105.25"),
+                ("base2", "85.15"),
+                ("trial2", "105.25"),
+            )
+        }
+        slots = [
+            selection.SlotCandidates(1, "base1", ("trial1", "trial1b")),
+            selection.SlotCandidates(2, "base2", ("trial2",)),
+        ]
+        return slots, rollouts
+
+    def test_batch_comparison_is_anonymous_and_generation_scoped(self):
+        (self.adapter.task_files("ledger-1") / "reference_answer.txt").write_text(
+            '"pass_rate": 1', encoding="utf-8"
+        )
+        slots, rollouts = self._batch_inputs()
+        proposer = _BatchProposer(self.proposer.spec)
+        self.adapter.score = Mock()
+
+        first = selection.run_batch_comparison(
+            "ledger-1",
+            2,
+            1,
+            slots,
+            rollouts,
+            adapter=self.adapter,
+            prop=proposer,
+            work_dir=self.root / "work",
+        )
+        self.assertTrue(first.ok)
+        self.assertEqual(first.survivors, {1: "trial1", 2: "base2"})
+        self.assertEqual((first.usd, first.attempts), (1.25, 2))
+        self.assertEqual(first.session, "compare.pop2.g1")
+        self.assertEqual(len(first.id_map), 5)
+        self.assertTrue(all(outcome.reason for outcome in first.outcomes))
+        first_label, first_mission, first_context = proposer.batch_calls[0]
+        self.assertTrue((first_context / "source/ledger.csv").is_file())
+        self.assertFalse(list(first_context.rglob("reference_answer.txt")))
+        self.assertNotIn('"pass_rate"', first_mission)
+        for label in rollouts:
+            self.assertNotIn(label, first_mission)
+        first_record = (first.root / "comparison.json").read_text()
+        self.assertEqual(json.loads(first_record)["attempts"], 2)
+
+        second = selection.run_batch_comparison(
+            "ledger-1",
+            2,
+            2,
+            slots,
+            rollouts,
+            adapter=self.adapter,
+            prop=proposer,
+            work_dir=self.root / "work",
+        )
+        self.assertTrue(second.ok)
+        self.assertEqual(second.survivors, first.survivors)
+        self.assertNotEqual(first.root, second.root)
+        self.assertEqual(
+            [label for label, _mission, _context in proposer.batch_calls],
+            ["compare.pop2.g1", "compare.pop2.g2"],
+        )
+        self.assertNotEqual(first_label, second.session)
+        self.assertEqual((first.root / "comparison.json").read_text(), first_record)
+        self.assertEqual(len(list((first.root / "candidates").glob("*.md"))), 5)
+        self.adapter.score.assert_not_called()
+
+    def test_batch_comparison_invalid_trial_preserves_only_relevant_parent(self):
+        slots, rollouts = self._batch_inputs()
+        rollouts["trial1"] = _comparison_rollout(
+            self.root, "trial1", "0", ok=False, delivered=False
+        )
+        proposer = _BatchProposer(self.proposer.spec)
+        self.adapter.score = Mock()
+
+        result = selection.run_batch_comparison(
+            "ledger-1",
+            2,
+            1,
+            slots,
+            rollouts,
+            adapter=self.adapter,
+            prop=proposer,
+            work_dir=self.root / "invalid",
+        )
+        self.assertEqual(result.survivors, {1: "base1", 2: "base2"})
+        self.assertEqual(result.outcomes[0].outcome, "parent_fallback")
+        self.assertIn("invalid trial", result.outcomes[0].error)
+        self.assertEqual(result.outcomes[1].outcome, "parent")
+        self.assertNotIn("slot 1:", proposer.batch_calls[0][1])
+        self.assertEqual(len(proposer.batch_calls), 1)
+        self.adapter.score.assert_not_called()
+
+    def test_batch_comparison_missing_winner_preserves_relevant_parent(self):
+        slots, rollouts = self._batch_inputs()
+        proposer = _BatchProposer(self.proposer.spec)
+
+        def only_first_slot(mission, context_dir):
+            slot, choice = proposer.source_winners(mission, context_dir)[0]
+            return f'<winner slot="{slot}" choice="{choice}">Source match.</winner>'
+
+        proposer.responder = only_first_slot
+        result = selection.run_batch_comparison(
+            "ledger-1",
+            2,
+            1,
+            slots,
+            rollouts,
+            adapter=self.adapter,
+            prop=proposer,
+            work_dir=self.root / "missing",
+        )
+        self.assertEqual(result.survivors, {1: "trial1", 2: "base2"})
+        self.assertEqual(result.outcomes[0].outcome, "accepted")
+        self.assertEqual(result.outcomes[1].outcome, "parent_fallback")
+        self.assertIn("no winner", result.outcomes[1].error)
+        self.assertEqual((result.usd, result.attempts), (1.25, 2))
+
+    def test_batch_comparison_failures_preserve_parents_and_return_costs(self):
+        def raise_comparator(_mission, _context_dir):
+            raise ProposerError("comparator unavailable", attempts=3, cost_usd=2.5)
+
+        cases = (
+            ("malformed", lambda _mission, _context: "not a valid reply", 1.25, 2),
+            ("exception", raise_comparator, 2.5, 3),
+        )
+        self.adapter.score = Mock()
+        for name, responder, usd, attempts in cases:
+            with self.subTest(name=name):
+                slots, rollouts = self._batch_inputs()
+                proposer = _BatchProposer(self.proposer.spec)
+                proposer.responder = responder
+                result = selection.run_batch_comparison(
+                    "ledger-1",
+                    2,
+                    1,
+                    slots,
+                    rollouts,
+                    adapter=self.adapter,
+                    prop=proposer,
+                    work_dir=self.root / name,
+                )
+                self.assertEqual(result.survivors, {1: "base1", 2: "base2"})
+                self.assertEqual(
+                    [outcome.outcome for outcome in result.outcomes],
+                    ["parent_fallback", "parent_fallback"],
+                )
+                self.assertEqual((result.usd, result.attempts), (usd, attempts))
+                self.assertTrue(result.error)
+                self.assertTrue((result.root / "comparison.json").is_file())
+        self.adapter.score.assert_not_called()
+
+    def test_batch_comparison_uncertain_or_unknown_choice_preserves_parent(self):
+        slots, rollouts = self._batch_inputs()
+        proposer = _BatchProposer(self.proposer.spec)
+        proposer.responder = lambda _mission, _context: (
+            '<winner slot="1" choice="UNCERTAIN">Too close.</winner>'
+            '<winner slot="2" choice="ZZ">Not an assigned candidate.</winner>'
+        )
+        result = selection.run_batch_comparison(
+            "ledger-1",
+            2,
+            1,
+            slots,
+            rollouts,
+            adapter=self.adapter,
+            prop=proposer,
+            work_dir=self.root / "uncertain",
+        )
+        self.assertEqual(result.survivors, {1: "base1", 2: "base2"})
+        self.assertIn("uncertain", result.outcomes[0].error)
+        self.assertIn("unknown candidate", result.outcomes[1].error)
 
 
 if __name__ == "__main__":

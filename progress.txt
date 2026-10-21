@@ -35,3 +35,24 @@ Source PRD: tasks/prd-istratde-population.md
   - `deterministic_trial_schedule` returns generation-keyed disjoint slots; `expected_trial_rollouts` includes the `2k` LLM trials plus `k` deterministic trials.
   - US-001 adds primitives only. Ledger accounting and recursion dispatch remain for US-003; do not expect `run_mode("pop")` to work yet.
 ---
+
+## 2026-10-21 12:00:28 CST - US-002
+- Implemented one-call anonymous batch survivor comparison with generation-scoped evidence, explicit per-slot winners, conservative parent retention, auditable outcomes, and cost/attempt records. Existing final selection and reflection paths are unchanged.
+- Files changed:
+  - `harness2/core/selection.py`
+  - `harness2/core/prompts.py`
+  - `tests/test_workflow.py`
+  - `tasks/prd-istratde-population.md`
+  - `prd.json`
+  - `progress.txt`
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -k batch_comparison -v` — 5 comparator tests passed, including a two-trial slot.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -m unittest discover -s tests -p 'test_workflow.py' -v` — 13 tests passed.
+  - `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.12 python -c "from pathlib import Path; import harness2.core.selection, harness2.core.prompts; compile(Path('tests/test_workflow.py').read_text(), 'tests/test_workflow.py', 'exec')"` — import and compile validation passed.
+  - `git diff --check` — passed.
+- **Learnings for future iterations:**
+  - `run_batch_comparison` accepts `SlotCandidates` and returns `BatchComparison`; use `survivors`, per-slot `outcomes`, `usd`, `attempts`, and `cached` for recursion and Ledger integration in US-003.
+  - Comparator sessions are `compare.pop{k}.g{generation}` and contexts are `comparisons/pop{k}/g{generation}`. Only that generation's root is cleared on restart; earlier generation evidence remains intact.
+  - An invalid parent or trial removes only that slot from the model batch and preserves its parent. Missing, unknown, malformed, or `UNCERTAIN` choices also preserve the relevant parent; valid remaining slots still use the same single batch call.
+  - `comparison.json` is written after the comparator call so anonymous ID mappings and outcomes never enter the model's evidence context.
+---

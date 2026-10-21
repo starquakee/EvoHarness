@@ -357,6 +357,317 @@ def run_selection(
     return sel
 
 
+@dataclass(frozen=True)
+class SlotCandidates:
+    """One slot's incumbent and its one or two challenger rollouts."""
+
+    slot: int
+    parent: str
+    trials: tuple[str, ...]
+
+
+@dataclass
+class ComparisonOutcome:
+    slot: int
+    parent: str
+    trials: tuple[str, ...]
+    survivor: str
+    outcome: str = "pending"
+    choice: str = ""
+    winner_id: str = ""
+    reason: str = ""
+    error: str = ""
+    candidate_ids: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def accepted(self) -> bool:
+        return self.outcome == "accepted"
+
+    def to_dict(self) -> dict:
+        out = {key: value for key, value in self.__dict__.items()}
+        out["trials"] = list(self.trials)
+        out["accepted"] = self.accepted
+        return out
+
+
+@dataclass
+class BatchComparison:
+    task_id: str
+    k: int
+    generation: int
+    session: str
+    root: Path
+    outcomes: list[ComparisonOutcome] = field(default_factory=list)
+    id_map: dict[str, str] = field(default_factory=dict)
+    dropped: list[str] = field(default_factory=list)
+    evidence: str = "deliverable"
+    usd: float = 0.0
+    attempts: int = 0
+    cached: bool = False
+    error: str = ""
+
+    @property
+    def survivors(self) -> dict[int, str]:
+        return {outcome.slot: outcome.survivor for outcome in self.outcomes}
+
+    @property
+    def ok(self) -> bool:
+        return not self.error and all(
+            outcome.outcome in ("accepted", "parent") for outcome in self.outcomes
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id": self.task_id,
+            "k": self.k,
+            "generation": self.generation,
+            "session": self.session,
+            "root": str(self.root),
+            "ok": self.ok,
+            "survivors": self.survivors,
+            "outcomes": [outcome.to_dict() for outcome in self.outcomes],
+            "id_map": self.id_map,
+            "dropped": self.dropped,
+            "evidence": self.evidence,
+            "usd": self.usd,
+            "attempts": self.attempts,
+            "cached": self.cached,
+            "error": self.error,
+        }
+
+
+_BATCH_WINNER = re.compile(
+    r'<winner\s+slot\s*=\s*"(\d+)"\s+choice\s*=\s*"([A-Za-z0-9_-]+)"\s*>'
+    r"(.*?)</winner>",
+    re.S,
+)
+
+
+def _parse_batch_winners(text: str) -> dict[int, tuple[str, str]]:
+    winners: dict[int, tuple[str, str]] = {}
+    matches = list(_BATCH_WINNER.finditer(text))
+    if not matches:
+        raise ValueError("no <winner slot=... choice=...> blocks in the reply")
+    for match in matches:
+        slot = int(match.group(1))
+        if slot in winners:
+            raise ValueError(f"duplicate winner for population slot {slot}")
+        winners[slot] = (match.group(2).strip(), match.group(3).strip())
+    return winners
+
+
+def _invalid_candidate_reason(label: str, missing: set[str], dropped: Sequence[str]) -> str:
+    if label in missing:
+        return f"{label}: missing rollout"
+    for entry in dropped:
+        if entry == label or entry.startswith(f"{label} ("):
+            return entry
+    return f"{label}: no usable artifact evidence"
+
+
+def _preserve_pending_parents(comparison: BatchComparison, reason: str) -> None:
+    for outcome in comparison.outcomes:
+        if outcome.outcome != "pending":
+            continue
+        outcome.survivor = outcome.parent
+        outcome.outcome = "parent_fallback"
+        outcome.reason = f"parent preserved: {reason}"[:2000]
+        outcome.error = reason[:400]
+    comparison.error = reason[:400]
+
+
+def _persist_batch(comparison: BatchComparison) -> None:
+    try:
+        comparison.root.mkdir(parents=True, exist_ok=True)
+        (comparison.root / "comparison.json").write_text(
+            json.dumps(comparison.to_dict(), indent=2, default=str) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        comparison.error = (
+            comparison.error + f" | could not persist comparison: {exc}"
+        ).strip(" |")[:400]
+
+
+def run_batch_comparison(
+    task_id: str,
+    k: int,
+    generation: int,
+    slots: Sequence[SlotCandidates],
+    rollouts: dict[str, RunView],
+    *,
+    adapter: BenchmarkAdapter,
+    prop: Proposer,
+    work_dir: Path,
+) -> BatchComparison:
+    """Compare all valid slots in one anonymous call, preserving parents on uncertainty."""
+    k = int(k)
+    generation = int(generation)
+    if k < 2:
+        raise ValueError(f"population batch comparison requires k >= 2, got {k}")
+    if generation not in (1, 2):
+        raise ValueError(f"population generation must be 1 or 2, got {generation}")
+    ordered = sorted(slots, key=lambda item: item.slot)
+    if not ordered:
+        raise ValueError("population batch comparison needs at least one slot")
+    if any(item.slot < 1 or item.slot > k for item in ordered) or len(
+        {item.slot for item in ordered}
+    ) != len(ordered):
+        raise ValueError(f"population comparison slots must be unique and in 1..{k}")
+    for item in ordered:
+        labels = (item.parent, *item.trials)
+        if not item.parent or len(item.trials) not in (1, 2) or len(set(labels)) != len(labels):
+            raise ValueError(
+                f"population slot {item.slot} needs a parent and one or two distinct trials"
+            )
+
+    root = Path(work_dir) / "comparisons" / f"pop{k}" / f"g{generation}"
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+    comparison = BatchComparison(
+        task_id=task_id,
+        k=k,
+        generation=generation,
+        session=f"compare.pop{k}.g{generation}",
+        root=root,
+    )
+    comparison.outcomes = [
+        ComparisonOutcome(
+            slot=item.slot,
+            parent=item.parent,
+            trials=tuple(item.trials),
+            survivor=item.parent,
+        )
+        for item in ordered
+    ]
+
+    labels = {label for item in ordered for label in (item.parent, *item.trials)}
+    candidates = {label: rollouts[label] for label in sorted(labels) if label in rollouts}
+    missing = labels - set(candidates)
+    render_state = Selection(task_id=task_id, mode="pop", k=k)
+    pool, artifacts = _render_pool(candidates, adapter, render_state)
+    comparison.dropped = sorted(render_state.dropped) + [
+        f"{label}: missing rollout" for label in sorted(missing)
+    ]
+    comparison.evidence = render_state.evidence
+
+    eligible: list[ComparisonOutcome] = []
+    for outcome in comparison.outcomes:
+        problems = []
+        if outcome.parent not in pool:
+            problems.append(
+                "parent "
+                + _invalid_candidate_reason(outcome.parent, missing, render_state.dropped)
+            )
+        for label in outcome.trials:
+            if label not in pool:
+                problems.append(
+                    "invalid trial "
+                    + _invalid_candidate_reason(label, missing, render_state.dropped)
+                )
+        if problems:
+            outcome.outcome = "parent_fallback"
+            outcome.error = "; ".join(problems)[:400]
+            outcome.reason = f"parent preserved: {outcome.error}"[:2000]
+        else:
+            eligible.append(outcome)
+
+    if not eligible:
+        comparison.error = "no valid population slots to compare; all parents preserved"
+        _persist_batch(comparison)
+        return comparison
+
+    tokens = [
+        f"{outcome.slot}:{position}:{label}"
+        for outcome in eligible
+        for position, label in enumerate((outcome.parent, *outcome.trials))
+    ]
+    token_map = assign_ids(
+        tokens,
+        task_id=task_id,
+        k=k,
+        mode=f"pop.compare.g{generation}",
+    )
+    by_slot = {outcome.slot: outcome for outcome in eligible}
+    for anon, token in token_map.items():
+        slot_text, _position, label = token.split(":", 2)
+        comparison.id_map[anon] = label
+        by_slot[int(slot_text)].candidate_ids[anon] = label
+
+    bp = resolve_prompts(adapter, task_id)
+    (root / "task.md").write_text(adapter.task_prompt(task_id), encoding="utf-8")
+    context.copy_source(adapter, task_id, root)
+    cand_dir = root / "candidates"
+    cand_dir.mkdir(exist_ok=True)
+    render_state.id_map = comparison.id_map
+    asset_names = _write_candidates(render_state, artifacts, pool, cand_dir, adapter)
+    reference_only = bool(getattr(adapter, "deliverable_assets_reference_only", False))
+    a_line, _a_evid = _evidence_block(asset_names, adapter, reference_only)
+    groups = [
+        (outcome.slot, sorted(outcome.candidate_ids))
+        for outcome in eligible
+    ]
+    mission = P.population_compare(
+        bp,
+        generation=generation,
+        groups=groups,
+        assets_note=a_line,
+    )
+    context.assert_no_grader_verdicts(root)
+
+    try:
+        reply = prop.call(mission, root, comparison.session)
+    except Exception as exc:
+        comparison.usd += getattr(exc, "cost_usd", 0.0)
+        comparison.attempts = max(1, int(getattr(exc, "attempts", 0) or 1))
+        _preserve_pending_parents(
+            comparison,
+            f"comparator failed: {type(exc).__name__}: {exc}",
+        )
+        _persist_batch(comparison)
+        return comparison
+
+    comparison.usd += reply.cost_usd
+    comparison.attempts = 0 if reply.cached else max(1, reply.attempts)
+    comparison.cached = reply.cached
+    try:
+        winners = _parse_batch_winners(reply.text)
+        unexpected = sorted(set(winners) - set(by_slot))
+        if unexpected:
+            raise ValueError(f"winners returned for unrequested population slots: {unexpected}")
+    except ValueError as exc:
+        _preserve_pending_parents(comparison, f"malformed comparator answer: {exc}")
+        _persist_batch(comparison)
+        return comparison
+
+    for outcome in eligible:
+        parsed = winners.get(outcome.slot)
+        if parsed is None:
+            outcome.outcome = "parent_fallback"
+            outcome.error = "comparator returned no winner for this slot"
+            outcome.reason = f"parent preserved: {outcome.error}"
+            continue
+        choice, why = parsed
+        outcome.choice = choice
+        if choice == "UNCERTAIN":
+            outcome.outcome = "parent_fallback"
+            outcome.error = "comparator was uncertain"
+            outcome.reason = (why or "parent preserved: comparator was uncertain")[:2000]
+            continue
+        if choice not in outcome.candidate_ids:
+            outcome.outcome = "parent_fallback"
+            outcome.error = f"comparator chose unknown candidate {choice!r} for this slot"
+            outcome.reason = (why or f"parent preserved: {outcome.error}")[:2000]
+            continue
+        outcome.winner_id = choice
+        outcome.survivor = outcome.candidate_ids[choice]
+        outcome.outcome = "parent" if outcome.survivor == outcome.parent else "accepted"
+        outcome.reason = why[:2000]
+
+    _persist_batch(comparison)
+    return comparison
+
+
 def trivial_selection(
     task_id: str,
     k: int,

@@ -1102,6 +1102,72 @@ def select(bp: BenchPrompts, n: int, pool_kind: str = "mixed", assets_note: str 
     )
 
 
+def population_compare(
+    bp: BenchPrompts,
+    *,
+    generation: int,
+    groups: list[tuple[int, list[str]]],
+    assets_note: str = "",
+) -> str:
+    """One answer-free survivor comparison over independently anonymized population slots."""
+    if not groups:
+        raise ValueError("population comparison needs at least one slot")
+    assignments = "\n".join(
+        f"slot {slot}: {', '.join(candidate_ids)}" for slot, candidate_ids in groups
+    )
+    return _tidy(
+        "\n\n".join(
+            [
+                f"You are comparing candidate answers for generation {generation} of a population "
+                "refinement. Choose the best available answer independently within every slot.",
+                _work(bp),
+                _lens(bp),
+                "# THE CANDIDATES ARE ANONYMOUS ON PURPOSE\n\n"
+                "The ids are arbitrary and shuffled. They do not identify an incumbent, a challenger, "
+                "or how an answer was produced. No candidate is privileged and novelty is not a merit. "
+                "Each slot is a separate comparison over answers to the SAME task; do not compare "
+                "across slots or try to make the winners consistent.",
+                "# WHAT YOU ARE LOOKING AT\n\n"
+                "    context/task.md              the request, verbatim\n"
+                "    context/source/             the material the work was done from\n"
+                f"    context/candidates/<id>.md  what that run PRODUCED -- the "
+                f"{bp.deliverable_word}, rendered\n" + (assets_note or "") + "\n"
+                "Open every candidate assigned below before deciding. Judge artifacts against the "
+                "request and source, never on how impressive or thorough they sound.\n\n"
+                "# SLOT ASSIGNMENTS\n\n" + assignments,
+                "# HOW TO DECIDE\n\n"
+                + (f"0. {bp.selection_lead.strip()}\n\n" if bp.selection_lead.strip() else "")
+                + f"1. DELIVERY AND COVERAGE. Is every {bp.deliverable_word} named by the request "
+                "present, in the requested form, with every required section, field, value and "
+                "analysis? Prefer the answer that covers more of the explicit request without "
+                "changing its required shape.\n\n"
+                "2. SOURCE FIDELITY AND CORRECTNESS. Check claims, names, figures and constraints "
+                "against `context/source/`. Where candidates disagree, the source decides. Reject "
+                "invented specifics; where the source is silent, prefer an explicit limitation over "
+                "a confident invention. Check totals, counts, references and other internal "
+                "consistency too.\n\n"
+                "3. USABILITY AND FINISH. The intended recipient must be able to open, import, run "
+                "or act on the answer without reconstructing missing work. Reject placeholders, "
+                "TODOs, broken references and empty required fields. Length and polish are not "
+                "merits in themselves.\n\n"
+                "A single execution is weak evidence. If the available artifacts do not support a "
+                "confident choice, report UNCERTAIN rather than guessing.",
+                _checks(bp),
+                ANSWER_FREE_SELECT,
+                EVIDENCE_BOUNDARY_SELECT,
+                "# OUTPUT FORMAT\n\n"
+                "Return exactly one block for every listed slot, in ascending slot order:\n\n"
+                '<winner slot="SLOT_NUMBER" choice="CANDIDATE_ID">'
+                "A short reason grounded in the request, source and artifact."
+                "</winner>\n\n"
+                "Use only an id assigned to that slot. Every slot must appear exactly once. If the "
+                'evidence is too close or incomplete, use choice="UNCERTAIN"; this conservatively '
+                "retains the incumbent. Do not add winners for unlisted slots.",
+            ]
+        )
+    )
+
+
 def experience(bp: BenchPrompts) -> str:
     """Two records: what each harness edit did, then the one lesson that transfers."""
     return _tidy(
