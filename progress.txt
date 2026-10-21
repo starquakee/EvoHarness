@@ -153,3 +153,12 @@ Source PRD: tasks/prd-istratde-population.md
   - Script-capable Demo strategies alternate generator-sum and explicit-loop implementations by generation and slot. Other fixed scopes retain the parent because the local executor runs only `scripts/summarize.py`; this exercises legal base survivors without violating edit scope.
   - US-007 remains blocked by its external Linux/LAB/credentials/network/cost-cap preconditions. Local Demo and unit-test success is not LAB improvement evidence.
 ---
+
+## 2026-10-21 12:57:37 CST - Final local verification
+- Independently reran the complete workflow suite after all six development stories: 24 tests passed.
+- Independently ran the population Demo twice against one temporary output root: first run completed 2 tasks with 0 failures, 16 executions, and 16 editor calls; repeat skipped both tasks with 0 executions and 0 editor calls.
+- Inspected both population summaries: each contained 2 fixed strategies, 6 lineage records, 2 comparison sessions, `R=8`, and `P=6`; `ledger-1` selected non-base `g1s1`, and `ledger-2` selected legal base survivor `base1`.
+- Independently ran and repeated the existing `both` Demo: summaries still contain only `agg` and `seq`, and the repeat made 0 executions and 0 editor calls.
+- `scripts/ralph/ralph.sh --agent kimi --dry-run` and `git diff --check` passed.
+- No real LAB experiment was run. US-007 remains false and blocked by its documented external preconditions.
+---
